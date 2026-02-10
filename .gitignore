@@ -2,90 +2,33 @@
 __pycache__/
 *.py[cod]
 *$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
 
 # Data files
 data/*.csv
 data/*.json
 data/images/
-data/keyframes/
-data/backtest_report.csv
-data/backtest_result_v2.csv
-data/blacklist.json
-data/blogger_tier_list.json
-data/dataset_comments.csv
-data/dataset_videos.csv
-data/discovery_comments.csv
-data/discovery_videos.csv
-data/growth_backtest_bloggers.csv
-data/growth_backtest_trades.csv
-data/hot_stocks.csv
-data/hot_stocks_backtest.csv
-data/
-analysis/
-*.db
-*.png
-.trae/
-.~lock.*
+!data/example_data.csv
+*.log
 
 # Configuration files
 config.py
 .env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
-*.key
-*.pem
-*.crt
 
 # IDE
 .vscode/
 .idea/
-*.swp
-*.swo
-*~
 
 # OS
 .DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
 Thumbs.db
 
-# Logs
-logs/
-*.log
-
-# Temporary files
-.temp/
-tmp/
-
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# Virtual environment
+# Virtual Environment
 venv/
 env/
+.venv/
 
-# Package files
-*.tar.gz
-*.zip
+# SSH Keys
+github_key
+github_key.pub
+id_ed25519_github
+id_ed25519_github.pub
