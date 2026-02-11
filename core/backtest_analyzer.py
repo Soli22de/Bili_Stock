@@ -12,9 +12,9 @@ from typing import Dict, List, Tuple
 import config
 
 class BacktestAnalyzer:
-    def __init__(self, report_path=config.BACKTEST_REPORT):
+    def __init__(self, df: pd.DataFrame = None, report_path=config.BACKTEST_REPORT):
         self.report_path = report_path
-        self.df = None
+        self.df = df
         self.metrics = {}
         
     def load_report(self) -> bool:

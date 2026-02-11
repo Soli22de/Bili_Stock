@@ -7,8 +7,11 @@ __pycache__/
 data/*.csv
 data/*.json
 data/images/
+data/keyframes/
+data/stock_data.db
 !data/example_data.csv
 *.log
+*.csv
 
 # Configuration files
 config.py
@@ -17,6 +20,7 @@ config.py
 # IDE
 .vscode/
 .idea/
+.trae/
 
 # OS
 .DS_Store

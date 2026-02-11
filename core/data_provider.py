@@ -7,6 +7,7 @@ import time
 # Add parent directory to sys.path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config
+from core.data_cache import DataCache
 import os
 import requests
 
@@ -14,6 +15,7 @@ class DataProvider:
     def __init__(self):
         self.ts_pro = None
         self.bs_logged_in = False
+        self.cache = DataCache() # 本地缓存
         
         if getattr(config, "DISABLE_PROXY", False):
             try:
@@ -94,33 +96,17 @@ class DataProvider:
         Get minute-level data (1min or 5min).
         Returns DataFrame with columns: ['time', 'open', 'high', 'low', 'close', 'volume', 'amount', 'vwap']
         """
+        code = self._normalize_code(code)
         df = None
         
-        # Strategy A: Tushare (1min)
-        enable_tushare_minute = getattr(config, "ENABLE_TUSHARE_MINUTE", True)
-        if self.ts_pro and enable_tushare_minute:
-            try:
-                ts_code = self._to_ts_code(code)
-                # Tushare expects start_date/end_date as YYYY-MM-DD HH:MM:SS or YYYYMMDD
-                # stk_mins limit: single fetch max 8000 rows. One day is 240 rows.
-                start_dt = f"{date_str} 09:30:00"
-                end_dt = f"{date_str} 15:00:00"
-                
-                df = self.ts_pro.stk_mins(ts_code=ts_code, start_date=start_dt, end_date=end_dt, freq='1min')
-                if df is not None and not df.empty:
-                    # Tushare cols: trade_time, open, close, high, low, vol, amount, ...
-                    # Sort by time
-                    df = df.sort_values('trade_time').reset_index(drop=True)
-                    df = df.rename(columns={
-                        'trade_time': 'time',
-                        'vol': 'volume'
-                    })
-                    print(f"Tushare 1min data fetched for {code} on {date_str} ({len(df)} rows)")
-            except Exception as e:
-                print(f"Tushare minute data failed: {e}")
-
-        # Strategy B: BaoStock (5min) - Fallback
-        if (df is None or df.empty) and self.bs_logged_in:
+        # 1. 优先从本地缓存读取
+        df = self.cache.load_minute_data(code, date_str, period=5) # 默认存5分钟线
+        if df is not None:
+            # print(f"Loaded {len(df)} rows from cache for {code}")
+            return df
+            
+        # 2. BaoStock (5min) - 主力免费源
+        if self.bs_logged_in:
             try:
                 import baostock as bs
                 bs_code = self._to_bs_code(code)
@@ -144,35 +130,82 @@ class DataProvider:
                             
                         # Format time: BaoStock time is YYYYMMDDHHMMSSssss
                         # We need YYYY-MM-DD HH:MM:SS
-                        # Actually standard bs time format for 5min is YYYYMMDDHHMMSS000
-                        # Example: 20250101093500000 -> 2025-01-01 09:35:00
-                        
                         def fmt_time(t):
                             t = str(t)
-                            if len(t) >= 14:
+                            if len(t) >= 12:
                                 return f"{t[0:4]}-{t[4:6]}-{t[6:8]} {t[8:10]}:{t[10:12]}:{t[12:14]}"
                             return t
                             
                         df['time'] = df['time'].apply(fmt_time)
-                        print(f"BaoStock 5min data fetched for {code} on {date_str} ({len(df)} rows)")
+                        
+                        # 存入缓存
+                        self.cache.save_minute_data(df, code, period=5)
+                        print(f"BaoStock 5min data fetched & cached for {code} on {date_str} ({len(df)} rows)")
             except Exception as e:
                 print(f"BaoStock minute data failed: {e}")
+
+        # 3. AkShare (1min/5min) - 备用免费源
+        if df is None or df.empty:
+            try:
+                import akshare as ak
+                # stock_zh_a_hist_min_em: 东财接口，稳定
+                # symbol: 600000
+                # period: 1, 5, 15, 30, 60
+                
+                # AkShare date format YYYY-MM-DD
+                # 需要注意 AkShare 分钟线可能无法获取指定历史日期的，通常是最近的数据
+                # stock_zh_a_hist_min_em 可以获取历史范围
+                
+                df_ak = ak.stock_zh_a_hist_min_em(symbol=code, start_date=f"{date_str} 09:00:00", end_date=f"{date_str} 15:00:00", period='5', adjust='qfq')
+                
+                if df_ak is not None and not df_ak.empty:
+                    # Rename: 时间, 开盘, 收盘, 最高, 最低, 成交量, 成交额, ...
+                    df_ak = df_ak.rename(columns={
+                        '时间': 'time', '开盘': 'open', '收盘': 'close', 
+                        '最高': 'high', '最低': 'low', '成交量': 'volume', 
+                        '成交额': 'amount'
+                    })
+                    
+                    # Filter for target date (AkShare might return more)
+                    df_ak = df_ak[df_ak['time'].astype(str).str.startswith(date_str)]
+                    
+                    if not df_ak.empty:
+                        df = df_ak[['time', 'open', 'high', 'low', 'close', 'volume', 'amount']]
+                        self.cache.save_minute_data(df, code, period=5)
+                        print(f"AkShare 5min data fetched & cached for {code} on {date_str}")
+            except Exception as e:
+                # print(f"AkShare minute data failed: {e}")
+                pass
+
+        # 4. Tushare (1min) - 最后手段
+        enable_tushare_minute = getattr(config, "ENABLE_TUSHARE_MINUTE", True)
+        if (df is None or df.empty) and self.ts_pro and enable_tushare_minute:
+            try:
+                ts_code = self._to_ts_code(code)
+                start_dt = f"{date_str} 09:30:00"
+                end_dt = f"{date_str} 15:00:00"
+                
+                df_ts = self.ts_pro.stk_mins(ts_code=ts_code, start_date=start_dt, end_date=end_dt, freq='1min')
+                if df_ts is not None and not df_ts.empty:
+                    df_ts = df_ts.sort_values('trade_time').reset_index(drop=True)
+                    df_ts = df_ts.rename(columns={'trade_time': 'time', 'vol': 'volume'})
+                    df = df_ts
+                    self.cache.save_minute_data(df, code, period=1) # Note: period=1
+                    print(f"Tushare 1min data fetched & cached for {code}")
+            except Exception as e:
+                print(f"Tushare minute data failed: {e}")
 
         if df is None or df.empty:
             print(f"No minute data found for {code} on {date_str}. Returning empty.")
             return None
 
         # Calculate VWAP
-        # VWAP = Cumulative(Price * Volume) / Cumulative(Volume)
-        # Ensure necessary columns exist
         if 'amount' not in df.columns:
-            df['amount'] = df['close'] * df['volume'] # Estimate if missing
+            df['amount'] = df['close'] * df['volume']
             
-        # Tushare/BaoStock 'amount' might be string or float, ensure float
         df['amount'] = pd.to_numeric(df['amount'])
         df['volume'] = pd.to_numeric(df['volume'])
         
-        # Calculate intraday VWAP
         df['cum_amount'] = df['amount'].cumsum()
         df['cum_vol'] = df['volume'].cumsum()
         df['vwap'] = df['cum_amount'] / df['cum_vol']
