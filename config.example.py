@@ -8,9 +8,12 @@ DEEPSEEK_API_KEY = "sk-f7a77c7d640d40f089af2c57d2370e02" # 请填入您的 DeepS
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEEPSEEK_MODEL = "deepseek-chat" # 或 deepseek-reasoner
 
-# Database Configuration (Optional)
-# If not set, will use local SQLite (data/cubes.db)
-# Example for MySQL: "mysql+pymysql://user:password@host:3306/bili_stock"
+# Database Configuration (Recommended: TiDB Cloud Serverless - Free Tier)
+# 1. Sign up at https://tidbcloud.com/
+# 2. Create a free Serverless Cluster
+# 3. Get connection string: "mysql+pymysql://<user>:<password>@<host>:4000/bili_stock?ssl_ca=/etc/ssl/cert.pem&ssl_verify_cert=true&ssl_verify_identity=true"
+# Note: TiDB requires SSL usually.
+# Example: "mysql+pymysql://2Mb1xxxxxxxx.root:Password123@gateway01.us-east-1.prod.aws.tidbcloud.com:4000/bili_stock?ssl_disabled=true" (if SSL issues)
 DB_URL = None
 
 # 钉钉机器人 Webhook (请替换为您自己的 Webhook 地址)
