@@ -16,7 +16,18 @@ from core.intraday_validator import IntradaySignalValidator
 from core.intraday_trader import PreMarketFilter
 
 def run_extraction():
-    print("Step 1: Extracting signals...")
+    print("Step 1: Running Bilibili Collector...")
+    # Run bili_collector.py as a separate process
+    collector_result = subprocess.run([sys.executable, os.path.join(os.path.dirname(__file__), 'bili_collector.py')], 
+                          capture_output=True, text=True)
+    if collector_result.returncode != 0:
+        print("Error collecting data:")
+        print("STDOUT:", collector_result.stdout)
+        print("STDERR:", collector_result.stderr)
+        return False
+    print(collector_result.stdout)
+
+    print("Step 2: Extracting signals...")
     # Run extract_signals.py as a separate process
     result = subprocess.run([sys.executable, os.path.join(os.path.dirname(__file__), 'extract_signals.py')], 
                           capture_output=True, text=True)
@@ -45,6 +56,32 @@ async def send_plan():
             return f"{v}{suffix}"
 
     parts = [f"### 今日策略 {today}\n\n"]
+
+    # 1. Add Resonance Signals (High Priority)
+    print("Checking Resonance Signals...")
+    try:
+        import json
+        res_proc = subprocess.run([sys.executable, 'scripts/xueqiu/check_resonance_today.py'], capture_output=True, text=True, cwd=os.getcwd())
+        if res_proc.returncode == 0:
+            output = res_proc.stdout.strip()
+            # Extract JSON part if there is noise
+            if output:
+                try:
+                    # Find the last line which should be the JSON
+                    lines = output.split('\n')
+                    json_line = lines[-1]
+                    res_signals = json.loads(json_line)
+                    
+                    if res_signals:
+                        parts.append("### 🔥 高胜率共振信号 (High Win Rate)\n")
+                        for sig in res_signals:
+                            parts.append(f"- **{sig['stock_code']}** {sig['action']} ({sig['reason']})\n")
+                        parts.append("\n")
+                except json.JSONDecodeError:
+                    print(f"Failed to parse resonance output: {output}")
+    except Exception as e:
+        print(f"Error checking resonance: {e}")
+
     if not buy_rows:
         parts.append("- 今日无买入信号\n")
     else:

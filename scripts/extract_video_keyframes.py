@@ -31,21 +31,56 @@ except ImportError:
     HAS_PADDLE = False
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+log_dir = "logs"
+if not os.path.exists(log_dir):
+    os.makedirs(log_dir)
+
+logging.basicConfig(
+    level=logging.INFO, 
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler(os.path.join(log_dir, "extract_video_keyframes.log"), mode='w', encoding='utf-8')
+    ]
+)
 logger = logging.getLogger(__name__)
 
 # Constants
 DATA_DIR = "data"
 KEYFRAMES_DIR = os.path.join(DATA_DIR, "keyframes")
 TEMP_VIDEO_DIR = os.path.join(DATA_DIR, "temp_videos")
-VIDEOS_CSV = os.path.join(DATA_DIR, "dataset_videos.csv")
+# Prefer discovery_videos.csv if it exists, otherwise fallback to dataset_videos.csv
+if os.path.exists(os.path.join(DATA_DIR, "discovery_videos.csv")):
+    VIDEOS_CSV = os.path.join(DATA_DIR, "discovery_videos.csv")
+else:
+    VIDEOS_CSV = os.path.join(DATA_DIR, "dataset_videos.csv")
 OCR_RESULTS_CSV = os.path.join(DATA_DIR, "video_ocr_results.csv")
 
-# Target bloggers for keyframe extraction
-TARGET_BLOGGERS = ["小匠财", "添材投资"]
+# Target bloggers will be loaded dynamically
+TARGET_BLOGGERS = [] 
+
+def load_target_bloggers():
+    """Load high-quality bloggers from rank file"""
+    rank_path = os.path.join(DATA_DIR, "trader_bloggers_rank.csv")
+    if os.path.exists(rank_path):
+        try:
+            df = pd.read_csv(rank_path)
+            if 'blogger_id' in df.columns:
+                bloggers = df['blogger_id'].dropna().unique().tolist()
+                # Convert to string to ensure matching
+                bloggers = [str(int(b)) for b in bloggers]
+                logger.info(f"Loaded {len(bloggers)} target bloggers (IDs) from {rank_path}")
+                return bloggers
+        except Exception as e:
+            logger.warning(f"Failed to load bloggers from rank file: {e}")
+    
+    # Fallback default list if file missing or empty
+    logger.info("Using default target bloggers list")
+    return []
+
 
 # Processing constraints
-MAX_VIDEOS_PER_BLOGGER = 10  # Increased limit
+MAX_VIDEOS_PER_BLOGGER = 20  # Increased limit for better coverage
 FRAME_INTERVAL_SEC = 2.0    # Extract 1 frame every X seconds
 
 def ensure_dir(path):
@@ -229,22 +264,27 @@ class LocalOCRProcessor:
         """
         Check for keywords indicating trading/holding
         """
-        keywords = ["持仓", "成交", "买入", "卖出", "盈亏", "成本", "市值", "委托", "撤单", "证券", "资产"]
+        keywords = ["持仓", "成交", "买入", "卖出", "盈亏", "成本", "市值", "委托", "撤单", "证券", "资产", "交割", "银证", "流水", "日记", "实盘", "打板"]
         if not text_lines:
             return [], False
 
         joined = " ".join(text_lines)
         normalized = joined.lower().replace(" ", "")
+        
+        # Enhanced patterns for stock codes
         patterns = [
-            r"(?:sz|sh)?\d{6}",
-            r"(?:\d\s*){6}"
+            r"(?:sz|sh)?\d{6}", # Standard
+            r"\b[036]\d{5}\b",   # Standalone 6 digits
+            r"(?:\d\s*){6}"      # Spaced digits
         ]
         codes = []
         for pattern in patterns:
             for match in re.findall(pattern, normalized):
                 code = re.sub(r"\D", "", match)
                 if len(code) == 6 and code not in codes:
-                    codes.append(code)
+                    # Filter common false positives (dates, times, counts)
+                    if not (code.startswith('202') or code.startswith('19')): 
+                         codes.append(code)
         
         # Check for stock names from map
         for name, code in self.stock_map.items():
@@ -365,28 +405,34 @@ def save_results(new_results):
     logger.info(f"Saved {len(new_results)} new results to {OCR_RESULTS_CSV}")
 
 def download_video(url, output_path):
-    """
-    Download video using yt-dlp
-    """
-    # Since we don't have ffmpeg, we must request a format that doesn't need merging.
-    # usually 'bestvideo' gives the video stream. 'best' might try to merge.
-    # We prefer mp4 for cv2 compatibility.
-    # Use avc1 (H.264) to ensure OpenCV compatibility and avoid HEVC/AV1 issues if codecs missing
-    ydl_opts = {
-        'format': 'bestvideo[vcodec^=avc1]', 
-        'outtmpl': output_path,
-        'quiet': False, # Enable logs to debug
-        'no_warnings': False,
-        'verbose': True,
-    }
-    
+    """Download video using yt-dlp"""
+    if os.path.exists(output_path):
+        return True
+        
     try:
+        ydl_opts = {
+            # OpenCV often fails with AV1. We prefer AVC (h264) which is most compatible.
+            # We don't need audio for OCR, so video-only is fine.
+            # 1. Best video-only MP4 with AVC
+            # 2. Best single-file MP4 with AVC
+            # 3. Best video-only MP4 (any codec, hope for HEVC/AVC)
+            # 4. Fallback
+            'format': 'bestvideo[ext=mp4][vcodec^=avc]/best[ext=mp4][vcodec^=avc]/bestvideo[ext=mp4]/best[ext=mp4]/best',
+            'outtmpl': output_path,
+            'quiet': True,
+            'no_warnings': True,
+            # Use cookies if available to avoid some restrictions
+            # 'cookies': 'cookies.txt', 
+            'socket_timeout': 15,
+            'retries': 3,
+            # Add a random user agent to avoid bot detection
+            'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            logger.info(f"Downloading {url}...")
             ydl.download([url])
         return True
     except Exception as e:
-        logger.error(f"Failed to download {url}: {e}")
+        logger.error(f"Download failed for {url}: {e}")
         return False
 
 def extract_frames(video_path, output_dir, interval_sec=2.0):
@@ -441,33 +487,53 @@ def main():
     # Initialize Local OCR Processor
     local_ocr = LocalOCRProcessor()
     
-    df = pd.read_csv(VIDEOS_CSV)
+    # Load target bloggers
+    global TARGET_BLOGGERS
+    TARGET_BLOGGERS = load_target_bloggers()
+    
+    # Read CSV with string types for IDs to preserve precision and formatting
+    df = pd.read_csv(VIDEOS_CSV, dtype={'dynamic_id': str, 'author_id': str, 'oid': str})
     
     # Filter for target bloggers
-    df = df[df['author_name'].isin(TARGET_BLOGGERS)]
+    if 'author_id' in df.columns:
+        # Ensure string type and handle potential float formatting
+        df['author_id'] = df['author_id'].astype(str).str.replace(r'\.0$', '', regex=True)
+        df = df[df['author_id'].isin(TARGET_BLOGGERS)]
+    else:
+        logger.warning("No author_id column in videos CSV")
+        return
     
     # Sort by date descending (newest first)
     if 'publish_time' in df.columns:
-        df['publish_time'] = pd.to_datetime(df['publish_time'])
+        df['publish_time'] = pd.to_datetime(df['publish_time'], errors='coerce')
         df = df.sort_values('publish_time', ascending=False)
         
-    logger.info(f"Found {len(df)} videos for target bloggers: {TARGET_BLOGGERS}")
+    logger.info(f"Found {len(df)} videos for target bloggers (IDs): {TARGET_BLOGGERS}")
     
-    processed_counts = {name: 0 for name in TARGET_BLOGGERS}
+    # Debug: Print first few video titles and authors
+    if not df.empty:
+        logger.info("Sample videos to process:")
+        for i, row in df.head(5).iterrows():
+            logger.info(f"- {row['author_name']} (ID: {row['author_id']}): {row['title']} ({row['url']})")
+
+    processed_counts = {mid: 0 for mid in TARGET_BLOGGERS}
     all_ocr_results = []
     
     for index, row in df.iterrows():
-        blogger = row['author_name']
+        blogger_name = row['author_name']
+        blogger_id = str(row['author_id'])
         video_url = row['url']
         video_id = str(row['dynamic_id']) # Using dynamic_id as unique key
         
-        if processed_counts[blogger] >= MAX_VIDEOS_PER_BLOGGER:
+        if processed_counts.get(blogger_id, 0) >= MAX_VIDEOS_PER_BLOGGER:
             continue
             
         # Skip if not a video link (simple check)
+        # Note: Bilibili dynamic links might be like https://t.bilibili.com/xxx or https://www.bilibili.com/video/avxxx
+        # We need to handle t.bilibili.com links which might not be videos directly
         if "video/av" not in video_url and "BV" not in video_url:
             # Maybe it's a dynamic without video?
-            logger.info(f"Skipping non-video URL: {video_url}")
+            logger.info(f"Skipping non-video URL (likely text dynamic): {video_url}")
             continue
             
         video_frames_dir = os.path.join(KEYFRAMES_DIR, video_id)
@@ -476,7 +542,7 @@ def main():
         # Check if frames already exist
         if os.path.exists(video_frames_dir) and len(os.listdir(video_frames_dir)) > 0:
             logger.info(f"Frames already exist for {video_id}. Proceeding to analysis.")
-            processed_counts[blogger] += 1
+            processed_counts[blogger_id] += 1
             frames_extracted = True
         else:
             ensure_dir(video_frames_dir)
@@ -503,7 +569,7 @@ def main():
             frame_count = extract_frames(temp_video_path, video_frames_dir, interval_sec=FRAME_INTERVAL_SEC)
             
             if frame_count > 0:
-                processed_counts[blogger] += 1
+                processed_counts[blogger_id] += 1
                 frames_extracted = True
                 
             # 3. Cleanup Video (Optional: Keep it if you want to debug, but verify space)
@@ -514,7 +580,7 @@ def main():
         # 4. Analyze Frames (if frames exist)
         if frames_extracted:
             # Check if we already analyzed this video? (Optional optimization)
-            video_results = analyze_frames(llm, local_ocr, video_id, blogger, video_frames_dir)
+            video_results = analyze_frames(llm, local_ocr, video_id, blogger_name, video_frames_dir)
             if video_results:
                 all_ocr_results.extend(video_results)
                 # Save incrementally
@@ -523,8 +589,11 @@ def main():
     logger.info("Processing complete.")
     logger.info(f"Processed counts: {processed_counts}")
     
-    if all_ocr_results:
-        logger.info(f"Total relevant frames found: {len(all_ocr_results)}")
+    if not all_ocr_results:
+        logger.info("No relevant frames found so far. Checking if any frames were extracted at all.")
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        logger.error(f"Fatal error in main: {e}", exc_info=True)

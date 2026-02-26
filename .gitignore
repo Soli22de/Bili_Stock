@@ -1,38 +1,30 @@
+# Data
+data/
+*.db
+*.csv
+*.json
+*.xlsx
+*.log
+logs/
+
+# Config
+config.py
+.env
+
 # Python
 __pycache__/
 *.py[cod]
 *$py.class
-
-# Data files
-data/*.csv
-data/*.json
-data/images/
-data/keyframes/
-data/stock_data.db
-!data/example_data.csv
-*.log
-*.csv
-
-# Configuration files
-config.py
-.env
+.venv/
+env/
+venv/
 
 # IDE
 .vscode/
 .idea/
 .trae/
+*.swp
 
 # OS
 .DS_Store
 Thumbs.db
-
-# Virtual Environment
-venv/
-env/
-.venv/
-
-# SSH Keys
-github_key
-github_key.pub
-id_ed25519_github
-id_ed25519_github.pub

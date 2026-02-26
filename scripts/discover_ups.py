@@ -28,7 +28,11 @@ HEADERS = {
 KEYWORDS = [
     "A股实盘", "股票实盘", "超短实盘", "淘股吧实盘", "实盘日记", "游资实盘",
     "股票复盘", "A股复盘", "涨停复盘", "龙虎榜", "打板日记", "龙头股", 
-    "短线交易", "股市早评", "股市收评", "交割单"
+    "短线交易", "股市早评", "股市收评", "交割单",
+    "实盘挑战", "百万实盘", "小资金实盘", "实盘记录",
+    "游资", "悟道", "淘股吧",
+    "首板", "连板", "二板", "打板", "低吸", "翘板", "竞价",
+    "可转债实盘", "ETF实盘"
 ]
 
 UP_LIST_FILE = config.UP_LIST_FILE if hasattr(config, 'UP_LIST_FILE') else "data/up_list.json"
@@ -36,7 +40,7 @@ KEYWORD_POOL_FILE = os.path.join("data", "keyword_pool.json")
 
 DEFAULT_VIDEO_KEYWORDS = [
     "实盘", "交割单", "持仓", "对账单", "复盘", "明日计划", "打板", "连板", "龙头",
-    "起飞", "翻倍", "收益", "涨停", "大肉", "爆赚"
+    "起飞", "翻倍", "收益", "涨停", "大肉", "爆赚", "悟道", "挑战", "记录", "日志"
 ]
 
 def _load_json(path, default):
@@ -129,8 +133,8 @@ async def main():
     
     # 2. 搜索更多 UP 主
     for kw in keywords:
-        # 每个关键词搜前 10 页
-        for page in range(1, 11):
+        # 每个关键词搜前 30 页 (Expanded from 10)
+        for page in range(1, 31):
             results = await search_users(kw, page)
             if not results:
                 break
@@ -142,7 +146,7 @@ async def main():
                 
                 # 过滤条件
                 # 1. 名字或简介包含股票相关词
-                relevant_terms = ["实盘", "股票", "A股", "交易", "复盘", "涨停", "短线", "龙虎榜", "财经", "投资"]
+                relevant_terms = ["实盘", "股票", "A股", "交易", "复盘", "涨停", "短线", "龙虎榜", "财经", "投资", "挑战", "记录", "日志", "悟道"]
                 is_relevant = any(t in name or t in sign for t in relevant_terms)
                 
                 # 2. 排除明显无关的（如游戏、生活区，虽然API没直接给分区，但可以通过关键词再次过滤）
@@ -156,7 +160,7 @@ async def main():
             await asyncio.sleep(random.uniform(3.0, 6.0)) # Increase delay to avoid 412
 
         # 3. 视频搜索反推作者 mid
-        for page in range(1, 11):
+        for page in range(1, 31):
             results = await search_videos(kw, page)
             if not results:
                 break

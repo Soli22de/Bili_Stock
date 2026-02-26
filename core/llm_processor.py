@@ -75,7 +75,10 @@ class LLMProcessor:
             6. is_transaction: 是否为成交记录 (bool)
             7. verification_status: 根据图片内容判断是否真实实盘 (Verified/Suspicious/Unknown)
             
-            如果图片模糊或无相关信息，请返回空JSON。
+            重要提示：
+            - 很多博主会把操作记录藏在视频关键帧中，请仔细识别。
+            - 即使是"事后"展示的交割单，只要清晰可见，也请提取，并标记 is_transaction=True。
+            - 如果图片模糊或无相关信息，请返回空JSON。
             """
             if context_text:
                 prompt += f"\n上下文参考: {context_text}"
@@ -135,15 +138,20 @@ class LLMProcessor:
         请提取以下字段 (JSON格式返回):
         - stock_code: 6位股票代码 (如 600000)
         - stock_name: 股票名称
-        - action: 操作建议 (BUY / SELL / WATCH)
+        - action: 操作建议 (BUY / SELL / WATCH / HOLD)
         - entry_price_min: 建议买入价格下限 (可选, float)
         - entry_price_max: 建议买入价格上限 (可选, float)
         - target_price: 止盈/目标价格 (可选, float)
         - stop_loss_price: 止损价格 (可选, float)
         - logic: 推荐逻辑摘要
-        
-        如果文本中包含具体的买卖价格区间，请务必提取。
-        如果没有明确股票代码或交易建议，返回空列表 []。
+        - is_hindsight: 是否为事后/复盘内容 (bool)。如果内容是"昨天买了XXX"或"之前在XXX低吸了"，标记为 true。
+        - actual_buy_price: 如果是事后/复盘内容，提取其实际买入价格 (可选, float)
+        - actual_buy_time: 如果是事后/复盘内容，提取其实际买入时间 (可选, string)
+
+        重要规则:
+        1. 即使是"事后诸葛亮"的内容(如"昨天我低吸了XX")，也请提取出来，将 is_hindsight 设为 true，并记录 actual_buy_price。这类信息用于分析博主的历史准确率。
+        2. 如果文本中包含具体的买卖价格区间，请务必提取。
+        3. 如果没有明确股票代码或交易建议，返回空列表 []。
         """
 
     def _fallback_regex_extraction(self, text: str) -> List[Dict[str, Any]]:

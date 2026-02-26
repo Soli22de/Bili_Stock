@@ -4,9 +4,14 @@
 GEMINI_API_KEY = ""  # 请在此处填入您的 Gemini API Key
 
 # DeepSeek API Key (用于市场情绪分析和策略生成)
-DEEPSEEK_API_KEY = "" # 请填入您的 DeepSeek API Key
+DEEPSEEK_API_KEY = "sk-f7a77c7d640d40f089af2c57d2370e02" # 请填入您的 DeepSeek API Key
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEEPSEEK_MODEL = "deepseek-chat" # 或 deepseek-reasoner
+
+# Database Configuration (Optional)
+# If not set, will use local SQLite (data/cubes.db)
+# Example for MySQL: "mysql+pymysql://user:password@host:3306/bili_stock"
+DB_URL = None
 
 # 钉钉机器人 Webhook (请替换为您自己的 Webhook 地址)
 # 获取方式：钉钉群 -> 智能群助手 -> 添加机器人 -> 自定义 -> 复制 Webhook

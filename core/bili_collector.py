@@ -84,6 +84,11 @@ if os.path.exists(UP_LIST_FILE):
             for uid, name in external_ups.items():
                 # JSON keys are always strings, convert to int if possible for consistency
                 try:
+                    # Filter: Keep bloggers with relevant keywords
+                    keywords = ["实盘", "交割单", "复盘", "游资", "打板", "龙头", "交易", "记录"]
+                    if not any(k in name for k in keywords):
+                        continue
+                        
                     uid_int = int(uid)
                     if uid_int not in UID_MAP:
                         UID_MAP[uid_int] = name
@@ -92,6 +97,25 @@ if os.path.exists(UP_LIST_FILE):
         print(f"Loaded {len(external_ups)} external UPs. Total unique UPs: {len(UID_MAP)}")
     except Exception as e:
         print(f"Error loading up_list.json: {e}")
+
+# Load monitored UPs (Active subset)
+MONITORED_LIST_FILE = "data/monitored_ups.json"
+if os.path.exists(MONITORED_LIST_FILE):
+    try:
+        with open(MONITORED_LIST_FILE, 'r', encoding='utf-8') as f:
+            monitored_ups = json.load(f)
+            count = 0
+            for uid, name in monitored_ups.items():
+                try:
+                    uid_int = int(uid)
+                    if uid_int not in UID_MAP:
+                        UID_MAP[uid_int] = name
+                        count += 1
+                except:
+                    pass
+        print(f"Loaded {count} new monitored UPs from {MONITORED_LIST_FILE}. Total unique UPs: {len(UID_MAP)}")
+    except Exception as e:
+        print(f"Error loading monitored_ups.json: {e}")
 
 # 全量运行
 UID_LIST = list(UID_MAP.keys()) 

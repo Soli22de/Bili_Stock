@@ -183,12 +183,16 @@ class PostFeatures:
     @property
     def specificity_score(self) -> float:
         score = 0.0
-        score += 1.0 if self.stock_names else 0.0
+        # "发股票名称比较多的也是优质的" - Boost score for number of stock names
+        stock_count = len(self.stock_names)
+        if stock_count > 0:
+            score += 1.0 + min(1.0, (stock_count - 1) * 0.5) # Bonus for multiple stocks
+        
         score += 1.0 if self.has_code else 0.0
         score += 1.0 if self.has_price else 0.0
         score += 1.0 if self.has_pct else 0.0
         score += min(1.0, self.trade_hits / 3.0)
-        return min(1.0, score / 4.5)
+        return min(1.0, score / 5.0) # Normalized roughly
 
 
 def build_post_features(text: str, stock_name_set: set) -> PostFeatures:
@@ -329,11 +333,11 @@ def score_bloggers(
         feat = build_post_features(text, stock_name_set)
         
         # Filter out hindsight content from scoring
-        # If a post contains ex-post terms, we treat it as not stock related for scoring purposes
-        # unless it also has significant forward-looking content (e.g. plan + review)
-        # User instruction: "马后炮只是不列入评分和参考而已"
-        if feat.ex_post_hits > 0:
-             feat.is_stock_related = False
+        # User instruction: "事后诸葛亮的假如之前提到也是没问题的"
+        # We no longer disqualify ex-post content. 
+        # Instead, we treat it as valid signals, especially if they contain stock names.
+        # if feat.ex_post_hits > 0:
+        #      feat.is_stock_related = False
 
         feat_rows.append(
             {
@@ -382,11 +386,16 @@ def score_bloggers(
         ex_post_component = min(1.0, ex_post_hits / max(1.0, forward_hits + 1))
 
         quality = 0.0
-        quality += 50.0 * activity_score
-        quality += 35.0 * specificity_avg
-        quality += 25.0 * forward_component
-        # Removed penalty for ex-post as those posts are now filtered out upstream
-        # quality -= 20.0 * ex_post_component 
+        quality += 40.0 * activity_score
+        # Boost specificity weight (stock names/codes)
+        quality += 45.0 * specificity_avg 
+        quality += 15.0 * forward_component
+        
+        # Bonus for total stock mention volume (User: "发股票名称比较多的也是优质的")
+        total_mentions = sum(per_up_stock_counter[author_id].values())
+        mention_bonus = min(15.0, total_mentions * 0.5)
+        quality += mention_bonus
+
         quality = max(0.0, min(100.0, quality))
 
         top_stocks = per_up_stock_counter.get(author_id, Counter()).most_common(10)
