@@ -12,7 +12,8 @@ DEEPSEEK_MODEL = "deepseek-chat" # 或 deepseek-reasoner
 # 1. Sign up at https://supabase.com/
 # 2. Create a new project -> Settings -> Database -> Connection string -> URI
 # 3. Connection string format: "postgresql+psycopg2://postgres:[YOUR-PASSWORD]@db.xxxxxxxx.supabase.co:5432/postgres"
-# Note: Requires `pip install psycopg2-binary`
+# Note: Requires `pip install psycopg2-binary` (Already installed)
+# Important: Replace [YOUR-PASSWORD] with the database password you set during project creation.
 DB_URL = None
 
 # 钉钉机器人 Webhook (请替换为您自己的 Webhook 地址)
