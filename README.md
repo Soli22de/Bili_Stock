@@ -1,96 +1,91 @@
-# Bili_Stock - AI量化交易系统
+# Smart Momentum Quant (智能动量量化系统)
 
-## 🎯 项目愿景
-基于B站实盘UP主数据的AI驱动量化交易系统，专注于小资金激进打板策略，实现AI自我进化的交易决策。
+[![License](https://img.shields.io/badge/license-Private-red.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/)
+[![Database](https://img.shields.io/badge/database-Supabase%20%7C%20TiDB-green.svg)](https://supabase.com/)
 
-## ✨ 核心特性
-- **多平台数据融合**：B站实盘视频 + 雪球投资观点 + 东方财富实时数据
-- **AI自我进化**：遗传算法优化交易策略，强化学习实时调整
-- **实时打板识别**：龙头股识别、情绪分析、资金流向追踪
-- **深度学习风控**：多维度风险控制，动态止损机制
+**Smart Momentum Quant** 是一个基于“聪明钱”跟踪与量价异动捕捉的量化交易系统。它通过监控雪球等平台上的数千个精英组合，结合严苛的量价共振模型，旨在发现机构潜伏后的右侧爆发机会。
 
-## 🚀 快速开始
+## 🌟 核心策略 (Core Strategy)
 
-### 环境要求
-- Python 3.12+
-- GPU支持（可选，用于深度学习加速）
+### 1. 聪明钱选股 (Smart Money Selection)
+- **精英组合池**：监控 1400+ 个经过筛选的精英组合（关注 > 40人，收益 > 0%）。
+- **共识机制**：利用 `SmartSignalLoader` 计算多组合对同一只股票的买入共识。
+- **Watchlist**：触发买入信号的股票不直接买入，而是加入“待观察名单”。
 
-### 安装依赖
+### 2. 量价异动择时 (Volume-Price Breakout)
+- **量能爆发**：`Vol > 1.5 * MA5_Vol`
+- **价格突破**：`Close > Open` 且 `PctChg > 3%`
+- **趋势确认**：`Close > MA10`
+- **严控风险**：剔除 ST、退市股、科创/创业板（可选）。
+
+## 🛠️ 协作开发指南 (Collaboration Guide)
+
+### 1. 环境准备
 ```bash
+# 1. 克隆项目
+git clone https://github.com/YourUsername/Smart-Momentum-Quant.git
+cd Smart-Momentum-Quant
+
+# 2. 安装依赖
 pip install -r requirements.txt
+pip install psycopg2-binary  # 数据库驱动
 ```
 
-### 数据收集
+### 2. 数据库配置 (关键!)
+本项目使用 **Supabase (PostgreSQL)** 作为中心化数据库，实现多人数据共享。
+
+1.  复制配置模板：
+    ```bash
+    cp config.example.py config.py
+    ```
+2.  修改 `config.py`：
+    *   **DB_URL**: 填入团队共享的 Supabase 连接串（请向项目负责人索取）。
+    *   **DEEPSEEK_API_KEY**: 填入您的 DeepSeek Key（用于 AI 分析）。
+
+### 3. 数据同步
+如果是第一次运行，或者需要更新本地数据到云端：
 ```bash
-# 收集B站UP主数据
-python scripts/discover_active_trading_ups.py --collect
+python scripts/migrate_sqlite_to_mysql.py
+```
+*(注：平时开发直接读取云端数据，无需手动同步)*
 
-# 分析UP主交易信号
-python scripts/discover_active_trading_ups.py --analyze
+## 📂 项目结构
+
+```
+Smart-Momentum-Quant/
+├── core/                   # 核心库
+│   ├── storage.py          # 数据库 ORM 模型 (SQLAlchemy)
+│   └── ...
+├── scripts/
+│   ├── xueqiu/             # 雪球策略核心代码
+│   │   ├── strategy_smart_momentum.py  # ⭐ 主策略回测引擎
+│   │   ├── fetch_cube_history.py       # 爬虫脚本
+│   │   └── ...
+│   └── migrate_sqlite_to_mysql.py      # 数据迁移工具
+├── data/                   # 本地数据缓存 (不提交到 Git)
+├── config.py               # 配置文件 (不提交到 Git)
+└── archive/                # 归档的旧代码 (B站策略等)
 ```
 
-### 运行回测
+## 🚀 常用命令
+
+**运行主策略回测：**
 ```bash
-python core/backtest_engine.py
+python scripts/xueqiu/strategy_smart_momentum.py
 ```
 
-## 📊 系统架构
+**抓取最新数据：**
+```bash
+python scripts/xueqiu/fetch_cube_history.py data/elite_5000_candidates.json
+```
 
-### 数据层
-- `BiliCollector`: B站实盘视频数据采集
-- `XueQiuCollector`: 雪球投资观点采集（开发中）
-- `EastMoneyCollector`: 东方财富实时数据（开发中）
-
-### AI策略层
-- `EvolutionaryTradingAI`: 遗传算法策略优化
-- `DeepSeekAnalyzer`: DeepSeek模型集成分析
-- `LimitUpAnalyzer`: 涨停板模式识别
-
-### 执行层
-- `IntradayTrader`: 日内交易执行
-- `RiskEngine`: 实时风险控制
-- `BacktestEngine`: 策略回测验证
-
-## 📈 策略特点
-
-### 小资金激进打板
-- **集中持仓**：单支股票30-50%仓位
-- **高频换手**：日级别持仓，追求复利增长
-- **严格止损**：-8%无条件止损，单日最大回撤控制3%
-- **龙头聚焦**：只做市场最强龙头股
-
-### AI进化机制
-- **遗传算法**：策略参数自动优化
-- **多模态学习**：文本、视频、数据融合分析
-- **实时反馈**：基于交易结果的策略调整
-
-## 🔒 安全说明
-
-本项目为**私有交易系统**，包含：
-- 敏感API密钥配置（已.gitignore）
-- 实盘交易逻辑
-- 专有算法实现
-
-**注意**：请勿公开敏感配置和实盘交易细节。
-
-## 📝 文档目录
-
-- [架构设计](ARCHITECTURE.md) - 详细系统架构说明
-- [算法文档](docs/algorithm/) - 核心交易算法详解
-- [开发指南](CONTRIBUTING.md) - 代码贡献规范
-- [更新日志](CHANGELOG.md) - 版本历史记录
-
-## 🛠 开发状态
-
-- ✅ B站数据采集 - 已完成
-- ✅ 基础回测框架 - 已完成
-- 🚧 AI策略进化 - 开发中
-- 📋 多平台集成 - 规划中
-
-## 📄 许可证
-
-私有项目 - 仅限个人使用
+## 🤝 贡献流程 (Workflow)
+1.  **Pull** 最新代码：`git pull origin main`
+2.  **Checkout** 新分支：`git checkout -b feature/new-idea`
+3.  **Commit** 修改：`git commit -m "feat: add new indicator"`
+4.  **Push** 分支：`git push origin feature/new-idea`
+5.  **Pull Request**：在 GitHub 上发起合并请求。
 
 ---
-
-**免责声明**：股市有风险，投资需谨慎。本系统仅为技术研究用途，不构成投资建议。
+**注意**：`config.py` 和 `data/` 目录下的文件包含敏感信息，已配置 `.gitignore`，请勿强制提交！
