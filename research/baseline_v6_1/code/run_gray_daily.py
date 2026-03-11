@@ -5,6 +5,7 @@ from typing import List
 import numpy as np
 import pandas as pd
 from datetime import datetime
+import math
 
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
@@ -71,6 +72,83 @@ def _load_risk(path: str) -> pd.DataFrame:
     x["date"] = pd.to_datetime(x["date"], errors="coerce")
     x = x.dropna(subset=["date"]).copy()
     return x
+
+
+def _load_trades(path: str) -> pd.DataFrame:
+    if not os.path.exists(path):
+        return pd.DataFrame(columns=["date", "stock_symbol", "side", "order_qty", "fill_qty", "order_px", "fill_px", "commission", "tax", "fees"])
+    x = pd.read_csv(path)
+    if x is None or x.empty:
+        return pd.DataFrame(columns=["date", "stock_symbol", "side", "order_qty", "fill_qty", "order_px", "fill_px", "commission", "tax", "fees"])
+    for c in ("date", "stock_symbol", "side", "order_qty", "fill_qty", "order_px", "fill_px", "commission", "tax", "fees"):
+        if c not in x.columns:
+            x[c] = np.nan
+    x["date"] = pd.to_datetime(x["date"], errors="coerce")
+    x = x.dropna(subset=["date"]).copy()
+    x["order_qty"] = pd.to_numeric(x["order_qty"], errors="coerce")
+    x["fill_qty"] = pd.to_numeric(x["fill_qty"], errors="coerce")
+    x["order_px"] = pd.to_numeric(x["order_px"], errors="coerce")
+    x["fill_px"] = pd.to_numeric(x["fill_px"], errors="coerce")
+    x["commission"] = pd.to_numeric(x["commission"], errors="coerce").fillna(0.0)
+    x["tax"] = pd.to_numeric(x["tax"], errors="coerce").fillna(0.0)
+    x["fees"] = pd.to_numeric(x["fees"], errors="coerce").fillna(0.0)
+    return x
+
+
+def _kpi_from_trades(tr: pd.DataFrame, day: pd.Timestamp) -> dict:
+    if tr is None or tr.empty:
+        return {
+            "trades_count": 0,
+            "turnover_notional": 0.0,
+            "avg_slippage_bps": np.nan,
+            "vwap_slippage_bps": np.nan,
+            "avg_fill_rate": np.nan,
+            "total_cost": 0.0,
+        }
+    t = tr[tr["date"].dt.normalize() == day.normalize()].copy()
+    if t.empty:
+        return {
+            "trades_count": 0,
+            "turnover_notional": 0.0,
+            "avg_slippage_bps": np.nan,
+            "vwap_slippage_bps": np.nan,
+            "avg_fill_rate": np.nan,
+            "total_cost": 0.0,
+        }
+    t["notional"] = pd.to_numeric(t["fill_px"], errors="coerce") * pd.to_numeric(t["fill_qty"], errors="coerce")
+    def _slip_row(row):
+        op = float(row.get("order_px")) if pd.notna(row.get("order_px")) else np.nan
+        fp = float(row.get("fill_px")) if pd.notna(row.get("fill_px")) else np.nan
+        sd = str(row.get("side")).upper() if pd.notna(row.get("side")) else ""
+        if not (pd.notna(op) and pd.notna(fp) and op > 0):
+            return np.nan
+        if sd == "BUY":
+            return (fp - op) / op * 10000.0
+        if sd == "SELL":
+            return (op - fp) / op * 10000.0
+        return (fp - op) / op * 10000.0
+    t["slip_bps"] = t.apply(_slip_row, axis=1)
+    def _fill_rate(row):
+        oq = float(row.get("order_qty")) if pd.notna(row.get("order_qty")) else np.nan
+        fq = float(row.get("fill_qty")) if pd.notna(row.get("fill_qty")) else np.nan
+        if pd.notna(oq) and oq > 0 and pd.notna(fq):
+            return float(fq) / float(oq)
+        return np.nan
+    t["fill_rate"] = t.apply(_fill_rate, axis=1)
+    k = {}
+    k["trades_count"] = int(len(t))
+    k["turnover_notional"] = float(pd.to_numeric(t["notional"], errors="coerce").sum(skipna=True))
+    k["avg_slippage_bps"] = float(pd.to_numeric(t["slip_bps"], errors="coerce").mean(skipna=True)) if not t["slip_bps"].dropna().empty else np.nan
+    if not t["slip_bps"].dropna().empty:
+        w = pd.to_numeric(t["notional"], errors="coerce").fillna(0.0)
+        x = pd.to_numeric(t["slip_bps"], errors="coerce")
+        denom = float(w.sum())
+        k["vwap_slippage_bps"] = float((w * x).sum() / denom) if denom > 0 else np.nan
+    else:
+        k["vwap_slippage_bps"] = np.nan
+    k["avg_fill_rate"] = float(pd.to_numeric(t["fill_rate"], errors="coerce").mean(skipna=True)) if not t["fill_rate"].dropna().empty else np.nan
+    k["total_cost"] = float((t["commission"] + t["tax"] + t["fees"]).sum(skipna=True))
+    return k
 
 
 def _cycle_tail(x: pd.DataFrame, n: int) -> pd.DataFrame:
@@ -374,6 +452,7 @@ def main():
     eq_fp = os.path.join(args.live_dir, "live_equity.csv")
     h_fp = os.path.join(args.live_dir, "live_holdings.csv")
     r_fp = os.path.join(args.live_dir, "live_risk_log.csv")
+    trades_fp = os.path.join(args.live_dir, "live_trades.csv")
     decision_fp = os.path.join(args.live_dir, "gray_deployment_decision.csv")
     compare_fp = os.path.join(args.live_dir, "daily_nav_compare.csv")
     report_fp = os.path.join(args.live_dir, "daily_report.md")
@@ -384,6 +463,7 @@ def main():
         base = _load_baseline(args.baseline)
         hold, warns = _load_holdings(h_fp)
         risk = _load_risk(r_fp)
+        trades = _load_trades(trades_fp)
         dec = _decide(live, base, args.cycle_bars)
         dec.to_csv(decision_fp, index=False, encoding="utf-8-sig")
         if base is None or base.empty:
@@ -397,6 +477,7 @@ def main():
         latest_d = pd.Timestamp(latest["date"])
         hold_n = int((hold["date"].dt.normalize() == latest_d.normalize()).sum())
         risk_n = int((risk["date"].dt.normalize() == latest_d.normalize()).sum())
+        kpi = _kpi_from_trades(trades, latest_d)
         with open(report_fp, "w", encoding="utf-8") as f:
             f.write("# baseline_v6.1 日报\n\n")
             f.write(f"- 日期：{latest_d.strftime('%Y-%m-%d')}\n")
@@ -407,6 +488,12 @@ def main():
             f.write(f"- 相对偏离：{float(latest['gap']):.2%}\n")
             f.write(f"- 当日持仓数：{hold_n}\n")
             f.write(f"- 当日风控触发数：{risk_n}\n")
+            f.write(f"- 成交笔数：{kpi['trades_count']}\n")
+            f.write(f"- 成交额：{kpi['turnover_notional']:.2f}\n")
+            f.write(f"- 滑点均值(bps)：{kpi['avg_slippage_bps']:.2f}\n" if not math.isnan(kpi["avg_slippage_bps"]) else "- 滑点均值(bps)：nan\n")
+            f.write(f"- 滑点加权均值(bps)：{kpi['vwap_slippage_bps']:.2f}\n" if not math.isnan(kpi["vwap_slippage_bps"]) else "- 滑点加权均值(bps)：nan\n")
+            f.write(f"- 平均成交率：{kpi['avg_fill_rate']:.2%}\n" if not math.isnan(kpi["avg_fill_rate"]) else "- 平均成交率：nan\n")
+            f.write(f"- 交易成本：{kpi['total_cost']:.2f}\n")
             if warns:
                 f.write(f"- 警告：{'|'.join(warns)}\n")
         if os.path.exists(error_fp):
