@@ -173,7 +173,42 @@ def _sortino(spread: pd.Series) -> float:
     return ann_ret / ann_down if ann_down > 0 else np.nan
 
 
-def _decide(live: pd.DataFrame, base: pd.DataFrame, cycle_bars: int) -> pd.DataFrame:
+def _risk_flags(risk: pd.DataFrame, recent_dates: pd.Series) -> dict:
+    out = {"pause": False, "reduce": False, "reasons": []}
+    if risk is None or risk.empty:
+        return out
+    dt_set = set(pd.to_datetime(recent_dates, errors="coerce").dropna().dt.normalize().tolist())
+    x = risk.copy()
+    x["date"] = pd.to_datetime(x["date"], errors="coerce").dt.normalize()
+    x = x[x["date"].isin(dt_set)].copy()
+    if x.empty:
+        return out
+    trig = x["trigger_type"].astype(str).str.lower().fillna("")
+    severe = {"portfolio_stop", "drawdown_brake", "risk_pause", "trading_halt"}
+    moderate = {"overheat_brake", "stock_stop", "industry_stop", "concentration_limit"}
+    if trig.isin(list(severe)).any():
+        out["pause"] = True
+        out["reasons"].append("risk_log_pause_triggered")
+    cnt_mod = int(trig.isin(list(moderate)).sum())
+    if cnt_mod >= 3:
+        out["reduce"] = True
+        out["reasons"].append("risk_log_reduce_triggered")
+    rs = x[x["subject"].astype(str) == "risk_scale"]
+    if not rs.empty:
+        vals = pd.to_numeric(rs["value"], errors="coerce").dropna()
+        if not vals.empty:
+            vmin = float(vals.min())
+            vavg = float(vals.mean())
+            if vmin < 0.4:
+                out["pause"] = True
+                out["reasons"].append("risk_scale_below_0_4")
+            elif vavg < 0.6:
+                out["reduce"] = True
+                out["reasons"].append("risk_scale_avg_below_0_6")
+    return out
+
+
+def _decide(live: pd.DataFrame, base: pd.DataFrame, cycle_bars: int, risk: pd.DataFrame | None = None) -> pd.DataFrame:
     if base is None or base.empty:
         m = live.copy()
         m["base_equity"] = np.nan
@@ -188,6 +223,7 @@ def _decide(live: pd.DataFrame, base: pd.DataFrame, cycle_bars: int) -> pd.DataF
     oos = _sortino(m["spread"])
     action = "hold_50"
     reasons = []
+    rf = _risk_flags(risk, now["date"]) if risk is not None else {"pause": False, "reduce": False, "reasons": []}
     if pd.notna(gap_now) and pd.notna(gap_prev) and gap_now < -0.05 and gap_prev < -0.05:
         action = "reduce_to_30"
         reasons.append("relative_nav_below_baseline_5pct_for_two_cycles")
@@ -199,6 +235,12 @@ def _decide(live: pd.DataFrame, base: pd.DataFrame, cycle_bars: int) -> pd.DataF
         reasons = ["outperform_baseline_two_cycles_and_positive_sortino"]
     if pd.notna(oos) and oos < 0:
         reasons.append("oos_sortino_below_zero")
+    if rf.get("pause"):
+        action = "pause_revalidate"
+        reasons.extend(rf.get("reasons", []))
+    elif rf.get("reduce") and action == "hold_50":
+        action = "reduce_to_30"
+        reasons.extend(rf.get("reasons", []))
     return pd.DataFrame(
         [
             {
@@ -464,7 +506,7 @@ def main():
         hold, warns = _load_holdings(h_fp)
         risk = _load_risk(r_fp)
         trades = _load_trades(trades_fp)
-        dec = _decide(live, base, args.cycle_bars)
+        dec = _decide(live, base, args.cycle_bars, risk)
         dec.to_csv(decision_fp, index=False, encoding="utf-8-sig")
         if base is None or base.empty:
             cmp = live.copy()
