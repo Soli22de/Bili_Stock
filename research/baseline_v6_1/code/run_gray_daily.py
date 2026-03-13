@@ -221,26 +221,31 @@ def _decide(live: pd.DataFrame, base: pd.DataFrame, cycle_bars: int, risk: pd.Da
     gap_prev = float(prev["gap"].iloc[-1]) if not prev.empty else np.nan
     cyc_mdd = _cycle_mdd(now["spread"])
     oos = _sortino(m["spread"])
-    action = "hold_50"
-    reasons = []
     rf = _risk_flags(risk, now["date"]) if risk is not None else {"pause": False, "reduce": False, "reasons": []}
-    if pd.notna(gap_now) and pd.notna(gap_prev) and gap_now < -0.05 and gap_prev < -0.05:
-        action = "reduce_to_30"
-        reasons.append("relative_nav_below_baseline_5pct_for_two_cycles")
-    if pd.notna(cyc_mdd) and cyc_mdd < -0.08:
-        action = "pause_revalidate"
+    sig_reduce_gap = pd.notna(gap_now) and pd.notna(gap_prev) and gap_now < -0.05 and gap_prev < -0.05
+    sig_pause_mdd = pd.notna(cyc_mdd) and cyc_mdd < -0.08
+    sig_upgrade = pd.notna(gap_now) and pd.notna(gap_prev) and gap_now > 0 and gap_prev > 0 and pd.notna(oos) and oos > 0
+    sig_oos_neg = pd.notna(oos) and oos < 0
+    reasons = []
+    if sig_pause_mdd:
         reasons.append("single_cycle_mdd_over_8pct")
-    if pd.notna(gap_now) and pd.notna(gap_prev) and gap_now > 0 and gap_prev > 0 and pd.notna(oos) and oos > 0:
-        action = "upgrade_to_70"
-        reasons = ["outperform_baseline_two_cycles_and_positive_sortino"]
-    if pd.notna(oos) and oos < 0:
+    if sig_reduce_gap:
+        reasons.append("relative_nav_below_baseline_5pct_for_two_cycles")
+    if sig_upgrade:
+        reasons.append("outperform_baseline_two_cycles_and_positive_sortino")
+    if sig_oos_neg:
         reasons.append("oos_sortino_below_zero")
-    if rf.get("pause"):
+    if rf.get("reasons"):
+        reasons.extend(rf.get("reasons", []))
+    if rf.get("pause") or sig_pause_mdd:
         action = "pause_revalidate"
-        reasons.extend(rf.get("reasons", []))
-    elif rf.get("reduce") and action == "hold_50":
+    elif rf.get("reduce") or sig_reduce_gap:
         action = "reduce_to_30"
-        reasons.extend(rf.get("reasons", []))
+    elif sig_upgrade:
+        action = "upgrade_to_70"
+    else:
+        action = "hold_50"
+    reasons = list(dict.fromkeys([str(x) for x in reasons if str(x).strip()]))
     return pd.DataFrame(
         [
             {
