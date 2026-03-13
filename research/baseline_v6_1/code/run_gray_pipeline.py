@@ -23,6 +23,7 @@ def main():
     ap.add_argument("--bootstrap-sample-days", type=int, default=0)
     ap.add_argument("--auto-fill-from-baseline", type=int, default=1)
     ap.add_argument("--stale-days", type=int, default=30)
+    ap.add_argument("--strict-live-freshness", type=int, default=1)
     args = ap.parse_args()
 
     os.makedirs(args.live_dir, exist_ok=True)
@@ -42,6 +43,8 @@ def main():
         str(args.auto_fill_from_baseline),
         "--stale-days",
         str(args.stale_days),
+        "--strict-live-freshness",
+        str(args.strict_live_freshness),
     ]
     if int(args.bootstrap_sample_days) > 0:
         daily_cmd.extend(["--bootstrap-sample-days", str(args.bootstrap_sample_days)])

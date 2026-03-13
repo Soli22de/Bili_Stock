@@ -151,6 +151,55 @@ def _kpi_from_trades(tr: pd.DataFrame, day: pd.Timestamp) -> dict:
     return k
 
 
+def _fmt_date(v: pd.Timestamp) -> str:
+    if pd.isna(v):
+        return "nan"
+    return pd.Timestamp(v).strftime("%Y-%m-%d")
+
+
+def _write_live_input_quality_report(
+    live: pd.DataFrame,
+    hold: pd.DataFrame,
+    risk: pd.DataFrame,
+    trades: pd.DataFrame,
+    stale_days: int,
+    out_path: str,
+) -> tuple[str, list[str]]:
+    warns: list[str] = []
+    now_d = pd.Timestamp(datetime.now().date())
+    eq_last = pd.to_datetime(live["date"], errors="coerce").max() if (live is not None and not live.empty) else pd.NaT
+    hold_last = pd.to_datetime(hold["date"], errors="coerce").max() if (hold is not None and not hold.empty) else pd.NaT
+    risk_last = pd.to_datetime(risk["date"], errors="coerce").max() if (risk is not None and not risk.empty) else pd.NaT
+    trade_last = pd.to_datetime(trades["date"], errors="coerce").max() if (trades is not None and not trades.empty) else pd.NaT
+    eq_age = int((now_d - pd.Timestamp(eq_last).normalize()).days) if pd.notna(eq_last) else 999999
+    if eq_age > int(stale_days):
+        warns.append("live_equity_stale")
+    if pd.notna(eq_last) and pd.notna(hold_last) and pd.Timestamp(hold_last).normalize() < pd.Timestamp(eq_last).normalize():
+        warns.append("live_holdings_lagging")
+    if pd.notna(eq_last) and pd.notna(risk_last) and pd.Timestamp(risk_last).normalize() < pd.Timestamp(eq_last).normalize():
+        warns.append("live_risk_log_lagging")
+    bad_weight_days = 0
+    if hold is not None and not hold.empty:
+        ww = hold.groupby(pd.to_datetime(hold["date"], errors="coerce").dt.normalize())["weight"].sum()
+        bad_weight_days = int(((ww < 0.95) | (ww > 1.05)).sum())
+        if bad_weight_days > 0:
+            warns.append("holdings_weight_out_of_range")
+    status = "WARN" if warns else "PASS"
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write("# baseline_v6.1 live 输入质量报告\n\n")
+        f.write(f"- 检查日期：{now_d.strftime('%Y-%m-%d')}\n")
+        f.write(f"- 质量状态：{status}\n")
+        f.write(f"- stale_days 阈值：{int(stale_days)}\n")
+        f.write(f"- live_equity 最新日期：{_fmt_date(eq_last)}\n")
+        f.write(f"- live_holdings 最新日期：{_fmt_date(hold_last)}\n")
+        f.write(f"- live_risk_log 最新日期：{_fmt_date(risk_last)}\n")
+        f.write(f"- live_trades 最新日期：{_fmt_date(trade_last)}\n")
+        f.write(f"- live_equity 相对当前滞后天数：{eq_age}\n")
+        f.write(f"- 持仓权重异常交易日数：{bad_weight_days}\n")
+        f.write(f"- 告警：{'|'.join(warns) if warns else 'none'}\n")
+    return status, warns
+
+
 def _cycle_tail(x: pd.DataFrame, n: int) -> pd.DataFrame:
     return x.tail(max(int(n), 1)).copy()
 
@@ -488,6 +537,7 @@ def main():
     ap.add_argument("--bootstrap-sample-days", type=int, default=0)
     ap.add_argument("--auto-fill-from-baseline", type=int, default=1)
     ap.add_argument("--stale-days", type=int, default=30)
+    ap.add_argument("--strict-live-freshness", type=int, default=1)
     args = ap.parse_args()
 
     os.makedirs(args.live_dir, exist_ok=True)
@@ -503,6 +553,7 @@ def main():
     decision_fp = os.path.join(args.live_dir, "gray_deployment_decision.csv")
     compare_fp = os.path.join(args.live_dir, "daily_nav_compare.csv")
     report_fp = os.path.join(args.live_dir, "daily_report.md")
+    quality_fp = os.path.join(args.live_dir, "live_input_quality_report.md")
     error_fp = os.path.join(args.live_dir, "daily_error_report.md")
 
     try:
@@ -511,7 +562,16 @@ def main():
         hold, warns = _load_holdings(h_fp)
         risk = _load_risk(r_fp)
         trades = _load_trades(trades_fp)
+        quality_status, quality_warns = _write_live_input_quality_report(live, hold, risk, trades, int(args.stale_days), quality_fp)
         dec = _decide(live, base, args.cycle_bars, risk)
+        if int(args.strict_live_freshness) > 0 and "live_equity_stale" in quality_warns:
+            dec.loc[0, "action"] = "pause_revalidate"
+            rs = []
+            raw_r = dec.loc[0, "reasons"]
+            if pd.notna(raw_r) and str(raw_r).strip():
+                rs.extend(str(raw_r).split("|"))
+            rs.append("live_equity_stale_guard")
+            dec.loc[0, "reasons"] = "|".join(list(dict.fromkeys([str(x).strip() for x in rs if str(x).strip()])))
         dec.to_csv(decision_fp, index=False, encoding="utf-8-sig")
         if base is None or base.empty:
             cmp = live.copy()
@@ -541,6 +601,9 @@ def main():
             f.write(f"- 滑点加权均值(bps)：{kpi['vwap_slippage_bps']:.2f}\n" if not math.isnan(kpi["vwap_slippage_bps"]) else "- 滑点加权均值(bps)：nan\n")
             f.write(f"- 平均成交率：{kpi['avg_fill_rate']:.2%}\n" if not math.isnan(kpi["avg_fill_rate"]) else "- 平均成交率：nan\n")
             f.write(f"- 交易成本：{kpi['total_cost']:.2f}\n")
+            f.write(f"- 新鲜度严格保护：{'ON' if int(args.strict_live_freshness) > 0 else 'OFF'}\n")
+            f.write(f"- 输入质量状态：{quality_status}\n")
+            f.write(f"- 输入质量告警：{'|'.join(quality_warns) if quality_warns else 'none'}\n")
             if warns:
                 f.write(f"- 警告：{'|'.join(warns)}\n")
         if os.path.exists(error_fp):
@@ -548,6 +611,7 @@ def main():
         print(decision_fp)
         print(compare_fp)
         print(report_fp)
+        print(quality_fp)
     except Exception as e:
         with open(error_fp, "w", encoding="utf-8") as f:
             f.write("# baseline_v6.1 日频执行错误\n\n")
