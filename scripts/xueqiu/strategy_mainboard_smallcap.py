@@ -78,13 +78,13 @@ class MainboardSignalLoader:
         gems_df = df[df['cube_symbol'].isin(gems)].copy()
         gems_df['weight_delta'] = gems_df['target_weight'] - gems_df['prev_weight_adjusted']
         
-        # High Conviction: Single add > 5%
-        high_conviction = gems_df[gems_df['weight_delta'] > 5].copy()
+        # High Conviction: Single add > 2% (Relaxed from 5%)
+        high_conviction = gems_df[gems_df['weight_delta'] > 2].copy()
         high_conviction['signal_type'] = 'ConvictionBuy'
         high_conviction = high_conviction[['date', 'stock_symbol', 'signal_type']].rename(columns={'stock_symbol': 'symbol'})
         
         # Factor B: 10-Day Accumulation (Institutional Stealth Buy)
-        # Logic: Steady Hands net buying > 2% over 10 days
+        # Logic: Steady Hands net buying > 0.2% over 10 days (Relaxed from 2%)
         steady_df = df[df['cube_symbol'].isin(steady_hands)].copy()
         steady_df['weight_delta'] = steady_df['target_weight'] - steady_df['prev_weight_adjusted']
         
@@ -95,7 +95,7 @@ class MainboardSignalLoader:
         # Stack
         acc_signals = rolling_10d.stack().reset_index()
         acc_signals.columns = ['date', 'symbol', 'net_flow']
-        acc_signals = acc_signals[acc_signals['net_flow'] > 2].copy() # >2% net accumulation
+        acc_signals = acc_signals[acc_signals['net_flow'] > 0.2].copy() # >0.2% net accumulation
         acc_signals['signal_type'] = 'Accumulation'
         acc_signals = acc_signals[['date', 'symbol', 'signal_type']]
         
@@ -107,8 +107,8 @@ class MainboardSignalLoader:
         others_df['weight_delta'] = others_df['target_weight'] - others_df['prev_weight_adjusted']
         
         retail_sell = others_df[others_df['weight_delta'] < 0].groupby(['date', 'stock_symbol'])['weight_delta'].sum().reset_index()
-        # Heavy selling: Net sell < -5% aggregate
-        panic_sells = retail_sell[retail_sell['weight_delta'] < -5].copy()
+        # Heavy selling: Net sell < -2% aggregate (Relaxed from -5%)
+        panic_sells = retail_sell[retail_sell['weight_delta'] < -2].copy()
         panic_sells['signal_type'] = 'Oversold'
         panic_sells = panic_sells.rename(columns={'stock_symbol': 'symbol'})[['date', 'symbol', 'signal_type']]
         
@@ -129,29 +129,35 @@ class MarketDataLoader:
         self.data_cache = {}
 
     def get_ohlcv(self, symbol, date):
-        """Get single day OHLCV."""
-        # Check memory cache
+        """Get single day OHLCV. Fetches full history if missing to ensure continuity."""
+        # 1. Check Memory
         if symbol in self.data_cache:
             df = self.data_cache[symbol]
             if date in df.index: return df.loc[date]
-            return None
-            
-        # Check disk cache
+            # If in memory but date missing, fall through to fetch/update
+        
+        # 2. Check Disk (only if not in memory)
         cache_file = os.path.join(self.cache_dir, f"{symbol}.csv")
-        if os.path.exists(cache_file):
+        if symbol not in self.data_cache and os.path.exists(cache_file):
             try:
                 df = pd.read_csv(cache_file, parse_dates=['date'], index_col='date')
-                self.data_cache[symbol] = df
-                if date in df.index: return df.loc[date]
-            except: pass
+                # Validate if date is present
+                if date in df.index:
+                    self.data_cache[symbol] = df
+                    return df.loc[date]
+                # If date missing in file, we need to fetch new data
+                # But we can keep the old data to merge? 
+                # Simpler: Just fetch fresh full history.
+            except Exception as e:
+                logging.warning(f"Error reading cache for {symbol}: {e}")
             
-        # Fetch (Batch for efficiency)
+        # 3. Fetch Full History (2015-Today)
+        # This ensures we have data for MA/Vol and future dates
         bs.login()
         bs_symbol = symbol.lower().replace('sz', 'sz.').replace('sh', 'sh.')
         
-        # Fetch 3 months around date to calc volatility
-        s_date = (date - timedelta(days=60)).strftime("%Y-%m-%d")
-        e_date = (date + timedelta(days=30)).strftime("%Y-%m-%d")
+        s_date = "2015-01-01"
+        e_date = datetime.now().strftime("%Y-%m-%d")
         
         rs = bs.query_history_k_data_plus(
             bs_symbol, "date,open,high,low,close,volume,pctChg",
@@ -218,6 +224,7 @@ class SmallAccountEngine:
         self.trade_log = []
         self.equity_curve = []
         self.market_loader = MarketDataLoader()
+        self.last_sell_date = {} # Track last sell date for Cooldown
         
         # Config
         self.max_vol_threshold = 3.5 # StdDev of daily returns < 3.5%
@@ -234,6 +241,7 @@ class SmallAccountEngine:
         logging.info("Starting Small Account Backtest (Greedy Allocation)...")
         if signals_df.empty: return
 
+        logging.info(f"Signal Date Range: {signals_df['date'].min()} to {signals_df['date'].max()}")
         dates = sorted(signals_df['date'].unique())
         
         for date in dates:
@@ -277,12 +285,7 @@ class SmallAccountEngine:
             elif hard_stop: reason = "HardStop"
             
             if reason:
-                self._sell(symbol, bar['open'], date, reason) # Sell next open usually, but here current close/open proxy
-                # Simplified: Sell at Open of TODAY if condition met yesterday? 
-                # Or Sell at Close of TODAY if condition met intraday?
-                # Let's assume Sell at Close for simplicity in this engine version
-                # Better: Sell at 'close'
-                pass
+                self._sell(symbol, bar['open'], date, reason) 
             else:
                 pos['days_held'] += 1
 
@@ -318,16 +321,34 @@ class SmallAccountEngine:
                 
             # 2. Cooldown Check (Re-entry allowed after cooldown)
             # If we hold it, skip.
-            if symbol in self.positions: continue
+            if symbol in self.positions: 
+                continue
             
+            # Cooldown: 5 days since last sell
+            if symbol in self.last_sell_date:
+                days_since_sell = (date - self.last_sell_date[symbol]).days
+                if days_since_sell < 5:
+                    continue
+
             # 3. Price & Cash Check
             bar = self.market_loader.get_ohlcv(symbol, date)
-            if bar is None: continue
+            if bar is None: 
+                continue
             
             price = bar['open']
             
-            # --- REMOVED ALL TECHNICAL FILTERS (Volatility, MA60) ---
-            # Just follow the Smart Money Signal directly.
+            # --- RESTORED TECHNICAL FILTERS (Volatility, MA60) ---
+            # 1. Volatility Filter
+            vol = self.market_loader.get_volatility(symbol, date)
+            if vol > self.max_vol_threshold:
+                # logging.info(f"Skip {symbol}: High Volatility {vol:.2f}")
+                continue
+                
+            # 2. Trend Filter (MA60)
+            ma60 = self.market_loader.get_ma(symbol, date, 60)
+            if ma60 is not None and price < ma60:
+                # logging.info(f"Skip {symbol}: Below MA60")
+                continue
             
             # 4. Affordability-First Sizing (30k Capital)
             # Calculate 1 lot cost
@@ -370,6 +391,7 @@ class SmallAccountEngine:
         pos = self.positions.pop(symbol)
         rev = price * pos['shares']
         self.cash += rev * (1 - self.comm_rate - 0.001) # Tax
+        self.last_sell_date[symbol] = date # Record sell date
         
         pnl = (price - pos['cost_price']) / pos['cost_price']
         self.trade_log.append({

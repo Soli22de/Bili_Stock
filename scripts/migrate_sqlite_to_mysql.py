@@ -107,16 +107,37 @@ def migrate_data():
         
         # Batch Insert for Speed
         batch = []
-        BATCH_SIZE = 1000
+        BATCH_SIZE = 100 # Reduced from 1000 to avoid timeouts
         
         for row in rows:
             c_at = parse_dt(row['created_at'])
             
-            # Simple check if already exists (can be slow, optimize if needed)
-            # For now, rely on try/except unique constraint or just check latest date?
-            # Let's assume target is empty for first migration.
-            # If not empty, we should check.
+            # Check existence first (to avoid constraint errors and speed up if already partial)
+            # This is slow row-by-row but safer for restarts.
+            # To speed up, maybe cache existing (cube, stock, created_at) tuples?
+            # But that's too much memory.
+            # Let's rely on BATCH insert and if it fails, fallback or ignore.
             
+            # Better approach: Try to fetch existing record for this specific row
+            # Or just use `merge`? SQLAlchemy merge is SELECT+INSERT/UPDATE.
+            # Given we have 100k+ rows, row-by-row check is slow.
+            
+            # Optimization: 
+            # We already have unique constraint on (cube_symbol, stock_symbol, created_at)
+            # We can try to bulk insert and ignore errors? No, entire transaction fails.
+            
+            # Let's stick to check-then-insert but optimize?
+            # Or just let it run, it might take time but it's safe.
+            
+            # Check existence (Slow but safe)
+            exists = session.query(RebalancingModel).filter_by(
+                cube_symbol=row['cube_symbol'],
+                stock_symbol=row['stock_symbol'],
+                created_at=c_at
+            ).first()
+            
+            if exists: continue
+
             rec = RebalancingModel(
                 cube_symbol=row['cube_symbol'],
                 stock_symbol=row['stock_symbol'],

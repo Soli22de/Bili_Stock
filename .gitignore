@@ -28,3 +28,6 @@ venv/
 # OS
 .DS_Store
 Thumbs.db
+
+# Archive
+archive/**/*.zip

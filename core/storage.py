@@ -65,8 +65,15 @@ class CubeStorage:
     def __init__(self, db_path: str = "data/cubes.db"):
         # Prioritize Config DB_URL
         if DB_URL:
-            self.engine = create_engine(DB_URL, echo=False)
-            logging.info(f"Connected to Database: {DB_URL.split('@')[-1]}") # Hide password
+            try:
+                self.engine = create_engine(DB_URL, echo=False)
+                # Test connection immediately
+                with self.engine.connect() as conn:
+                    pass
+                logging.info(f"Connected to Database: {DB_URL.split('@')[-1]}") # Hide password
+            except Exception as e:
+                logging.error(f"Failed to connect to DB_URL: {e}. Fallback to SQLite.")
+                self.engine = create_engine(f"sqlite:///{db_path}", echo=False)
         else:
             # Fallback to SQLite
             sqlite_url = f"sqlite:///{db_path}"

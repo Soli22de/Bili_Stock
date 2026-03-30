@@ -30,6 +30,7 @@ TUSHARE_TOKEN = ""
 ENABLE_TUSHARE = True
 ENABLE_TUSHARE_MINUTE = True
 DISABLE_PROXY = True
+XUEQIU_COOKIE = ""
 
 # 股票代码映射表路径
 STOCK_MAP_PATH = "data/stock_map_final.json"

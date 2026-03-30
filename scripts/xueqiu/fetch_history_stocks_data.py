@@ -4,6 +4,7 @@ import os
 import time
 import concurrent.futures
 import logging
+import re
 
 # Configure logging
 logging.basicConfig(
@@ -15,24 +16,40 @@ DATA_DIR = "data/stock_data"
 if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR)
 
+def normalize_symbol(stock_code):
+    s = str(stock_code).strip().upper()
+    if s.endswith(".HK") or s.startswith("HK"):
+        hk = s.replace(".HK", "").replace("HK", "")
+        hk = re.sub(r"[^0-9]", "", hk).zfill(5)
+        return f"{hk}.HK", "HK", hk
+    raw = s.replace(".SH", "").replace(".SZ", "").replace(".BJ", "")
+    raw = re.sub(r"[^0-9]", "", raw).zfill(6)
+    if raw.startswith(("6", "5", "9")):
+        return f"{raw}.SH", "A", raw
+    if raw.startswith(("0", "2", "3")):
+        return f"{raw}.SZ", "A", raw
+    if raw.startswith(("4", "8")):
+        return f"{raw}.BJ", "A", raw
+    return f"{raw}.SZ", "A", raw
+
 def fetch_stock(stock_code):
-    file_path = os.path.join(DATA_DIR, f"{stock_code}.csv")
+    std_symbol, market, source_symbol = normalize_symbol(stock_code)
+    file_path = os.path.join(DATA_DIR, f"{std_symbol}.csv")
     if os.path.exists(file_path):
-        # Check if file is recent enough?
-        # For now, just skip if exists to save time, unless user wants refresh
-        return f"Skipped {stock_code}"
+        return f"Skipped {std_symbol}"
 
     try:
-        # Convert SH600000 to 600000
-        code = stock_code[2:]
-        df = ak.stock_zh_a_hist(symbol=code, period="daily", start_date="20220101", end_date="20260217", adjust="qfq")
+        if market == "HK":
+            df = ak.stock_hk_hist(symbol=source_symbol, period="daily", start_date="20100101", end_date="20251231", adjust="qfq")
+        else:
+            df = ak.stock_zh_a_hist(symbol=source_symbol, period="daily", start_date="20100101", end_date="20251231", adjust="qfq")
         if df.empty:
-            return f"Empty {stock_code}"
+            return f"Empty {std_symbol}"
             
         df.to_csv(file_path, index=False)
-        return f"Fetched {stock_code}"
+        return f"Fetched {std_symbol}"
     except Exception as e:
-        return f"Error {stock_code}: {str(e)}"
+        return f"Error {std_symbol}: {str(e)}"
 
 def run():
     with open("data/long_history_stocks.txt", "r") as f:

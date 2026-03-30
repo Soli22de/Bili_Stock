@@ -1,16 +1,26 @@
 import pandas as pd
 import akshare as ak
 from datetime import datetime, timedelta
-import sys
-import os
 import random
+import importlib.util
+from pathlib import Path
 
-# Add parent directory to sys.path
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+try:
+    import config
+except ImportError:
+    _config_path = Path(__file__).resolve().parent.parent / "config.py"
+    _spec = importlib.util.spec_from_file_location("config", _config_path)
+    if _spec is None or _spec.loader is None:
+        raise
+    config = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(config)
 
-import config
-from core.data_provider import DataProvider
-from core.strategies import BaseStrategy, DragonStrategy
+try:
+    from core.data_provider import DataProvider
+    from core.strategies import BaseStrategy, DragonStrategy
+except ImportError:
+    from data_provider import DataProvider
+    from strategies import BaseStrategy, DragonStrategy
 
 class BacktestEngine:
     def __init__(self, signals_file=config.SIGNALS_CSV, strategy: BaseStrategy = None):

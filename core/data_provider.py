@@ -1,43 +1,43 @@
 import pandas as pd
-import sys
 import os
 import datetime
 import time
+import re
+import importlib.util
+from pathlib import Path
 
-# Add parent directory to sys.path
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import config
-from core.data_cache import DataCache
-import os
-import requests
+try:
+    import config
+except ImportError:
+    _config_path = Path(__file__).resolve().parent.parent / "config.py"
+    _spec = importlib.util.spec_from_file_location("config", _config_path)
+    if _spec is None or _spec.loader is None:
+        raise
+    config = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(config)
+
+try:
+    from core.data_cache import DataCache
+    from core.net_env import no_proxy_env
+except ImportError:
+    from data_cache import DataCache
+    from net_env import no_proxy_env
 
 class DataProvider:
     def __init__(self):
         self.ts_pro = None
         self.bs_logged_in = False
         self.cache = DataCache() # 本地缓存
-        
-        if getattr(config, "DISABLE_PROXY", False):
-            try:
-                orig = requests.Session.request
-                def patched(self, method, url, *args, **kwargs):
-                    kwargs["proxies"] = {"http": None, "https": None}
-                    return orig(self, method, url, *args, **kwargs)
-                requests.Session.request = patched
-                os.environ["http_proxy"] = ""
-                os.environ["https_proxy"] = ""
-                os.environ["HTTP_PROXY"] = ""
-                os.environ["HTTPS_PROXY"] = ""
-            except Exception:
-                pass
+        self.disable_proxy = bool(getattr(config, "DISABLE_PROXY", False))
         
         # Initialize Tushare
         enable_tushare = getattr(config, "ENABLE_TUSHARE", False)
         if enable_tushare and hasattr(config, 'TUSHARE_TOKEN') and config.TUSHARE_TOKEN:
             try:
-                import tushare as ts
-                ts.set_token(config.TUSHARE_TOKEN)
-                self.ts_pro = ts.pro_api()
+                with no_proxy_env(self.disable_proxy):
+                    import tushare as ts
+                    ts.set_token(config.TUSHARE_TOKEN)
+                    self.ts_pro = ts.pro_api()
                 print("Tushare Pro initialized.")
             except ImportError:
                 print("Tushare not installed. Please `pip install tushare`.")
@@ -72,20 +72,32 @@ class DataProvider:
                 pass
 
     def _normalize_code(self, code):
-        """Standardize code for internal use (e.g. 600000)"""
-        return str(code).zfill(6)
+        c = str(code).strip().upper()
+        if c.endswith(".HK") or c.startswith("HK"):
+            c = c.replace(".HK", "").replace("HK", "")
+            c = re.sub(r"[^0-9]", "", c).zfill(5)
+            return f"{c}.HK"
+        c = c.replace(".SH", "").replace(".SZ", "").replace(".BJ", "")
+        c = re.sub(r"[^0-9]", "", c).zfill(6)
+        return c
+
+    def _is_hk_code(self, code):
+        c = str(code).strip().upper()
+        return c.endswith(".HK") or c.startswith("HK")
 
     def _to_ts_code(self, code):
-        """Convert to Tushare format: 600000.SH"""
         c = self._normalize_code(code)
+        if c.endswith(".HK"):
+            return c
         if c.startswith('6'): return f"{c}.SH"
         if c.startswith('0') or c.startswith('3'): return f"{c}.SZ"
         if c.startswith('8') or c.startswith('4'): return f"{c}.BJ"
         return c
 
     def _to_bs_code(self, code):
-        """Convert to BaoStock format: sh.600000"""
         c = self._normalize_code(code)
+        if c.endswith(".HK"):
+            return c
         if c.startswith('6'): return f"sh.{c}"
         if c.startswith('0') or c.startswith('3'): return f"sz.{c}"
         if c.startswith('8') or c.startswith('4'): return f"bj.{c}"
@@ -147,7 +159,8 @@ class DataProvider:
         # 3. AkShare (1min/5min) - 备用免费源
         if df is None or df.empty:
             try:
-                import akshare as ak
+                with no_proxy_env(self.disable_proxy):
+                    import akshare as ak
                 # stock_zh_a_hist_min_em: 东财接口，稳定
                 # symbol: 600000
                 # period: 1, 5, 15, 30, 60
@@ -156,7 +169,8 @@ class DataProvider:
                 # 需要注意 AkShare 分钟线可能无法获取指定历史日期的，通常是最近的数据
                 # stock_zh_a_hist_min_em 可以获取历史范围
                 
-                df_ak = ak.stock_zh_a_hist_min_em(symbol=code, start_date=f"{date_str} 09:00:00", end_date=f"{date_str} 15:00:00", period='5', adjust='qfq')
+                with no_proxy_env(self.disable_proxy):
+                    df_ak = ak.stock_zh_a_hist_min_em(symbol=code, start_date=f"{date_str} 09:00:00", end_date=f"{date_str} 15:00:00", period='5', adjust='qfq')
                 
                 if df_ak is not None and not df_ak.empty:
                     # Rename: 时间, 开盘, 收盘, 最高, 最低, 成交量, 成交额, ...
@@ -185,7 +199,8 @@ class DataProvider:
                 start_dt = f"{date_str} 09:30:00"
                 end_dt = f"{date_str} 15:00:00"
                 
-                df_ts = self.ts_pro.stk_mins(ts_code=ts_code, start_date=start_dt, end_date=end_dt, freq='1min')
+                with no_proxy_env(self.disable_proxy):
+                    df_ts = self.ts_pro.stk_mins(ts_code=ts_code, start_date=start_dt, end_date=end_dt, freq='1min')
                 if df_ts is not None and not df_ts.empty:
                     df_ts = df_ts.sort_values('trade_time').reset_index(drop=True)
                     df_ts = df_ts.rename(columns={'trade_time': 'time', 'vol': 'volume'})
@@ -218,12 +233,14 @@ class DataProvider:
         Prioritize BaoStock for reliable turnover/amount.
         """
         df = None
+        is_hk = self._is_hk_code(code)
+        norm_code = self._normalize_code(code)
         
         # 1. BaoStock
-        if self.bs_logged_in:
+        if self.bs_logged_in and (not is_hk):
             try:
                 import baostock as bs
-                bs_code = self._to_bs_code(code)
+                bs_code = self._to_bs_code(norm_code)
                 rs = bs.query_history_k_data_plus(bs_code,
                     "date,open,high,low,close,volume,amount,turn,pctChg",
                     start_date=start_date, end_date=end_date,
@@ -239,18 +256,19 @@ class DataProvider:
                         for col in ['open', 'high', 'low', 'close', 'volume', 'amount', 'turn', 'pctChg']:
                             df[col] = pd.to_numeric(df[col])
                         df.set_index('date', inplace=True)
-                        print(f"BaoStock daily data fetched for {code} ({len(df)} rows)")
+                        print(f"BaoStock daily data fetched for {norm_code} ({len(df)} rows)")
             except Exception as e:
                 print(f"BaoStock daily data failed: {e}")
 
         # 2. AkShare (Fallback)
         if df is None or df.empty:
-            if self.ts_pro:
+            if self.ts_pro and (not is_hk):
                 try:
-                    ts_code = self._to_ts_code(code)
+                    ts_code = self._to_ts_code(norm_code)
                     s_dt = start_date.replace('-', '')
                     e_dt = end_date.replace('-', '')
-                    df_ts = self.ts_pro.daily(ts_code=ts_code, start_date=s_dt, end_date=e_dt)
+                    with no_proxy_env(self.disable_proxy):
+                        df_ts = self.ts_pro.daily(ts_code=ts_code, start_date=s_dt, end_date=e_dt)
                     if df_ts is not None and not df_ts.empty:
                         df_ts = df_ts.copy()
                         # Convert trade_date to YYYY-MM-DD index
@@ -266,23 +284,23 @@ class DataProvider:
                         })
                         df_ts.set_index('date', inplace=True)
                         df = df_ts[['open','high','low','close','volume','amount','pctChg']].astype(float)
-                        print(f"Tushare daily data fetched for {code} ({len(df)} rows)")
+                        print(f"Tushare daily data fetched for {norm_code} ({len(df)} rows)")
                 except Exception as e:
                     print(f"Tushare daily data failed: {e}")
         if df is None or df.empty:
             try:
-                import akshare as ak
-                ak_code = self._normalize_code(code)
-                # ak.stock_zh_a_daily often fails or changes, use spot_em or hist
-                # stock_zh_a_hist usually reliable
-                # start_date for ak is YYYYMMDD
+                with no_proxy_env(self.disable_proxy):
+                    import akshare as ak
                 s_dt = start_date.replace('-', '')
                 e_dt = end_date.replace('-', '')
-                
-                df_ak = ak.stock_zh_a_hist(symbol=ak_code, start_date=s_dt, end_date=e_dt, adjust="qfq")
+                if is_hk:
+                    hk_symbol = norm_code.replace(".HK", "")
+                    with no_proxy_env(self.disable_proxy):
+                        df_ak = ak.stock_hk_hist(symbol=hk_symbol, period="daily", start_date=s_dt, end_date=e_dt, adjust="qfq")
+                else:
+                    with no_proxy_env(self.disable_proxy):
+                        df_ak = ak.stock_zh_a_hist(symbol=norm_code, start_date=s_dt, end_date=e_dt, adjust="qfq")
                 if df_ak is not None and not df_ak.empty:
-                    # Rename columns
-                    # 日期, 开盘, 收盘, 最高, 最低, 成交量, 成交额, 振幅, 涨跌幅, 涨跌额, 换手率
                     df_ak = df_ak.rename(columns={
                         '日期': 'date', '开盘': 'open', '收盘': 'close', 
                         '最高': 'high', '最低': 'low', '成交量': 'volume', 
@@ -291,7 +309,7 @@ class DataProvider:
                     df_ak['date'] = df_ak['date'].astype(str)
                     df_ak.set_index('date', inplace=True)
                     df = df_ak
-                    print(f"AkShare daily data fetched for {code} ({len(df)} rows)")
+                    print(f"AkShare daily data fetched for {norm_code} ({len(df)} rows)")
             except Exception as e:
                 print(f"AkShare daily data failed: {e}")
                 
@@ -311,7 +329,8 @@ class DataProvider:
     def get_index_data(self, date_str, index_code="000001.SH"):
         if self.ts_pro:
             try:
-                df = self.ts_pro.index_daily(ts_code=index_code, start_date=date_str.replace('-', ''), end_date=date_str.replace('-', ''))
+                with no_proxy_env(self.disable_proxy):
+                    df = self.ts_pro.index_daily(ts_code=index_code, start_date=date_str.replace('-', ''), end_date=date_str.replace('-', ''))
                 if df is not None and not df.empty:
                     row = df.iloc[0]
                     return {

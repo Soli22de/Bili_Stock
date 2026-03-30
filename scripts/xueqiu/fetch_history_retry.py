@@ -1,4 +1,3 @@
-
 import sqlite3
 import requests
 import pandas as pd
@@ -8,17 +7,26 @@ import random
 import os
 from datetime import datetime
 
-# Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+
+def _load_xueqiu_cookie():
+    cookie = os.getenv("XUEQIU_COOKIE", "").strip()
+    if cookie:
+        return cookie
+    try:
+        import config
+        cookie = str(getattr(config, "XUEQIU_COOKIE", "")).strip()
+    except Exception:
+        cookie = ""
+    return cookie
+
 
 class HistoryFetcherRetry:
     def __init__(self, db_path="data/cubes.db"):
         self.db_path = db_path
         self.session = requests.Session()
-        
-        # Use the long, robust cookie from xueqiu_spy.py
-        self.raw_cookie = "acw_tc=3ccdc17e17713034273231509ee15c6e0f10dfb94b43e659b594d9d295e9b5; cookiesu=341771303427330; device_id=c803c3ee03e54a3a75ffde5e3f9b928d; Hm_lvt_1db88642e346389874251b5a1eded6e3=1771303428; HMACCOUNT=10B820C8E54C37A9; smidV2=20260217124348f9f63420da6530e44bccf87b1221265d009b6bb43cc4d88d0; xq_a_token=33c6a88412590f9d707de51fbca5a323ef9a0ef3; xqat=33c6a88412590f9d707de51fbca5a323ef9a0ef3; xq_id_token=eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJ1aWQiOjYyOTc4MjIyMzgsImlzcyI6InVjIiwiZXhwIjoxNzczODk1Mjg0LCJjdG0iOjE3NzEzMDM0Mzc5NDEsImNpZCI6ImQ5ZDBuNEFadXAifQ.QjcXIPhbZmzCzhl1h8WQDjPFWOwu1P70rITs1UO_JrulikDYlGAevgkLGj4bG1AeQK4P8OKoQHkVzZc_Y1C5mLYxIdtyGUwVmyWhOrvtBYpx-IdWDhfxelt9sUCeyzWPKMQGU6K9dX64b4PfJ2RU1AjkysRXdBaP_lwtIUygOFH_M0GatP31lfX-yVNS5HdhQx7GGZX2QHIOo5JYzV9Fk-kcUW_G17DOqqhA03ZFcfrtYiydjICQPD7pAiaXGWuV4h1dmkk--IMYIL2ihbGMzkiEiAMKvOedAw4yPvPJGu_yMauYC-KLV_E49UlWLOjR_F5X1z4Ey8xVEPst2XEXsw; xq_r_token=075e5a5288f1d196eed9ffa5cc99aca5e136bff8; xq_is_login=1; u=6297822238; is_overseas=0;"
-        
+        self.raw_cookie = _load_xueqiu_cookie()
         self.headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Referer": "https://xueqiu.com/",
@@ -26,122 +34,153 @@ class HistoryFetcherRetry:
             "Host": "xueqiu.com",
             "X-Requested-With": "XMLHttpRequest"
         }
-        
         self._init_session()
 
     def _init_session(self):
-        for cookie in self.raw_cookie.split('; '):
+        if not self.raw_cookie:
+            raise RuntimeError("Missing XUEQIU_COOKIE. Set env XUEQIU_COOKIE or config.XUEQIU_COOKIE.")
+        for cookie in self.raw_cookie.split(';'):
+            cookie = cookie.strip()
             if '=' in cookie:
                 key, value = cookie.split('=', 1)
                 self.session.cookies.set(key, value, domain=".xueqiu.com")
         self.session.headers.update(self.headers)
-        logging.info("Session initialized with robust cookie.")
+        if "xq_a_token" not in self.session.cookies:
+            raise RuntimeError("XUEQIU_COOKIE missing xq_a_token.")
+        logging.info("Session initialized.")
 
-    def run(self):
-        # 1. Get targets
+    def _select_targets(self):
         conn = sqlite3.connect(self.db_path)
-        # Get top gainers (Top 300)
         try:
-            # Load all cubes to do tiered selection
             df = pd.read_sql_query("SELECT symbol, total_gain, followers_count, monthly_gain FROM cubes", conn)
-            
-            # Logic: Top 50 Legends, Top 200 Hidden Gems, Top 50 Rising Stars
             legends = df[(df['total_gain'] > 50) & (df['followers_count'] > 1000)].sort_values('total_gain', ascending=False).head(50)
             hidden_gems = df[(df['total_gain'] > 30) & (df['followers_count'] < 500)].sort_values('total_gain', ascending=False).head(200)
             rising_stars = df[(df['monthly_gain'] > 10)].sort_values('monthly_gain', ascending=False).head(50)
-            
             combined = pd.concat([legends, hidden_gems, rising_stars]).drop_duplicates(subset=['symbol'])
-            targets = combined['symbol'].tolist()
+            targets = combined['symbol'].dropna().astype(str).tolist()
             logging.info(f"Selection: {len(legends)} Legends, {len(hidden_gems)} Hidden Gems, {len(rising_stars)} Rising Stars. Total Unique: {len(targets)}")
-            
-        except Exception as e:
-            logging.error(f"Failed to get targets: {e}")
-            targets = []
-        conn.close()
-        
+            return targets
+        finally:
+            conn.close()
+
+    def _fetch_symbol_pages(self, symbol, page_size=50, max_pages=80):
+        items_all = []
+        for page in range(1, max_pages + 1):
+            self.session.headers.update({"Referer": f"https://xueqiu.com/P/{symbol}"})
+            params = {
+                "cube_symbol": symbol,
+                "count": page_size,
+                "page": page,
+                "_": int(time.time() * 1000)
+            }
+            resp = self.session.get("https://xueqiu.com/cubes/rebalancing/history.json", params=params, timeout=12)
+            if resp.status_code in (400, 401, 403):
+                return [], page, f"HTTP_{resp.status_code}"
+            if resp.status_code != 200:
+                return items_all, page, f"HTTP_{resp.status_code}"
+            data = resp.json()
+            items = data.get("list", []) or []
+            if not items:
+                return items_all, page, "OK"
+            items_all.extend(items)
+            if len(items) < page_size:
+                return items_all, page, "OK"
+            time.sleep(random.uniform(0.2, 0.5))
+        return items_all, max_pages, "MAX_PAGES_REACHED"
+
+    def _to_dt(self, ts):
+        try:
+            ts = int(ts)
+            if ts > 1000000000000:
+                return datetime.fromtimestamp(ts / 1000)
+            return datetime.fromtimestamp(ts)
+        except Exception:
+            return datetime.now()
+
+    def _flatten_records(self, symbol, items):
+        now = datetime.now()
+        rows = []
+        for item in items:
+            created_at = self._to_dt(item.get("created_at", 0))
+            status = item.get("status", "success")
+            net_value = item.get("net_value", 0.0)
+            histories = item.get("rebalancing_histories", []) or []
+            for hist in histories:
+                stock_symbol = str(hist.get("stock_symbol", "")).strip()
+                if not stock_symbol:
+                    continue
+                rows.append((
+                    symbol,
+                    stock_symbol,
+                    str(hist.get("stock_name", "")).strip(),
+                    float(hist.get("prev_weight_adjusted", 0.0) or 0.0),
+                    float(hist.get("target_weight", 0.0) or 0.0),
+                    float(hist.get("price", 0.0) or 0.0),
+                    float(net_value or 0.0),
+                    created_at,
+                    now,
+                    status
+                ))
+        return rows
+
+    def run(self):
+        targets = self._select_targets()
         logging.info(f"Targeting {len(targets)} cubes for history fetch...")
-        
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        
+        quality_rows = []
         total_saved = 0
         for i, symbol in enumerate(targets):
-            logging.info(f"[{i+1}/{len(targets)}] Fetching {symbol}...")
-            
-            # 2. Fetch history (try)
+            logging.info(f"[{i + 1}/{len(targets)}] Fetching {symbol}...")
             try:
-                # Need to implement fetch_history logic properly
-                # Visit page first
-                try:
-                    self.session.get(f"https://xueqiu.com/P/{symbol}", headers={"User-Agent": self.headers["User-Agent"]}, timeout=5)
-                    time.sleep(random.uniform(0.5, 1.0))
-                except:
-                    pass
-                
-                # Call API
-                url = "https://xueqiu.com/cubes/rebalancing/history.json"
-                params = {
-                    "cube_symbol": symbol,
-                    "count": 20,
-                    "page": 1,
-                    "_": int(time.time() * 1000)
-                }
-                self.session.headers.update({"Referer": f"https://xueqiu.com/P/{symbol}"})
-                
-                resp = self.session.get(url, params=params, timeout=10)
-                
-                if resp.status_code == 200:
-                    data = resp.json()
-                    items = data.get("list", [])
-                    
-                    if items:
-                        for item in items:
-                            if "rebalancing_histories" not in item: continue
-                            
-                            created_at_ts = item.get("created_at", 0)
-                            if created_at_ts > 1000000000000:
-                                created_at = datetime.fromtimestamp(created_at_ts/1000)
-                            else:
-                                created_at = datetime.fromtimestamp(created_at_ts)
-                            
-                            for hist in item["rebalancing_histories"]:
-                                cursor.execute('''
-                                    INSERT OR IGNORE INTO rebalancing_history (
-                                        cube_symbol, stock_symbol, stock_name,
-                                        prev_weight_adjusted, target_weight,
-                                        price, net_value, created_at, updated_at, status
-                                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                                ''', (
-                                    symbol,
-                                    hist.get("stock_symbol"),
-                                    hist.get("stock_name", ""),
-                                    hist.get("prev_weight_adjusted", 0.0),
-                                    hist.get("target_weight", 0.0),
-                                    hist.get("price", 0.0),
-                                    item.get("net_value", 0.0),
-                                    created_at,
-                                    datetime.now(),
-                                    item.get("status", "success")
-                                ))
-                                total_saved += 1
-                        conn.commit()
-                        logging.info(f"Saved records for {symbol}.")
-                    else:
-                        logging.warning(f"No history items for {symbol}")
-                elif resp.status_code == 403 or resp.status_code == 400:
-                    logging.warning(f"Access Denied (403/400) for {symbol}. Cookie might be invalid.")
-                    # Break loop if cookie is invalid to avoid ban?
-                    # Maybe try a few more.
+                self.session.get(f"https://xueqiu.com/P/{symbol}", timeout=6)
+            except Exception:
+                pass
+            try:
+                items, pages, status = self._fetch_symbol_pages(symbol)
+                rows = self._flatten_records(symbol, items)
+                if rows:
+                    before = conn.total_changes
+                    cursor.executemany('''
+                        INSERT OR IGNORE INTO rebalancing_history (
+                            cube_symbol, stock_symbol, stock_name,
+                            prev_weight_adjusted, target_weight,
+                            price, net_value, created_at, updated_at, status
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', rows)
+                    conn.commit()
+                    inserted = conn.total_changes - before
+                    total_saved += inserted
                 else:
-                    logging.warning(f"Error {resp.status_code} for {symbol}")
-                    
+                    inserted = 0
+                quality_rows.append({
+                    "cube_symbol": symbol,
+                    "status": status,
+                    "pages": pages,
+                    "history_items": len(items),
+                    "rows_flattened": len(rows),
+                    "rows_inserted": inserted
+                })
+                logging.info(f"{symbol} status={status} pages={pages} items={len(items)} inserted={inserted}")
             except Exception as e:
+                conn.rollback()
+                quality_rows.append({
+                    "cube_symbol": symbol,
+                    "status": f"ERROR:{e}",
+                    "pages": 0,
+                    "history_items": 0,
+                    "rows_flattened": 0,
+                    "rows_inserted": 0
+                })
                 logging.error(f"Error processing {symbol}: {e}")
-            
-            time.sleep(random.uniform(1, 2))
-            
+            time.sleep(random.uniform(0.6, 1.2))
         conn.close()
-        logging.info(f"Done. Total records saved: {total_saved}")
+        if quality_rows:
+            os.makedirs("data", exist_ok=True)
+            pd.DataFrame(quality_rows).to_csv("data/xueqiu_fetch_quality.csv", index=False, encoding="utf-8-sig")
+            logging.info("Saved quality report: data/xueqiu_fetch_quality.csv")
+        logging.info(f"Done. Total records inserted: {total_saved}")
+
 
 if __name__ == "__main__":
     fetcher = HistoryFetcherRetry()

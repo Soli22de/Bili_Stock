@@ -161,19 +161,30 @@ class DailyTraderBot:
         self.today = datetime.now().strftime("%Y-%m-%d")
 
     def get_market_price(self, symbol):
-        """Get latest closing price from BaoStock."""
+        """Get latest closing price from BaoStock (Robust)."""
         bs.login()
         # Convert SH600000 -> sh.600000
         code = symbol.lower().replace('sh', 'sh.').replace('sz', 'sz.')
+        
+        # Try fetching last 5 days to ensure we get a price even if today is missing/holiday
+        start_date = (datetime.now() - timedelta(days=5)).strftime("%Y-%m-%d")
+        end_date = datetime.now().strftime("%Y-%m-%d")
+        
         rs = bs.query_history_k_data_plus(
-            code, "close", 
-            start_date=self.today, end_date=self.today, 
+            code, "date,close", 
+            start_date=start_date, end_date=end_date, 
             frequency="d", adjustflag="3"
         )
         bs.logout()
         
-        if rs.error_code == '0' and rs.next():
-            return float(rs.get_row_data()[0])
+        data_list = []
+        while rs.error_code == '0' and rs.next():
+            data_list.append(rs.get_row_data())
+            
+        if data_list:
+            # Return the last available close
+            return float(data_list[-1][1])
+            
         return None
 
     def run_daily_cycle(self):

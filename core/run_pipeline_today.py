@@ -3,17 +3,32 @@ import os
 import subprocess
 import asyncio
 from datetime import datetime, timedelta
+import importlib.util
+from pathlib import Path
 import pandas as pd
 
-# Add parent directory to sys.path
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+try:
+    import config
+except ImportError:
+    _config_path = Path(__file__).resolve().parent.parent / "config.py"
+    _spec = importlib.util.spec_from_file_location("config", _config_path)
+    if _spec is None or _spec.loader is None:
+        raise
+    config = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(config)
 
-import config
-from core.notifier import DingTalkNotifier
-from core.monitor_and_notify import StockMonitor
-from core.backtest_engine import BacktestEngine
-from core.intraday_validator import IntradaySignalValidator
-from core.intraday_trader import PreMarketFilter
+try:
+    from core.notifier import DingTalkNotifier
+    from core.monitor_and_notify import StockMonitor
+    from core.backtest_engine import BacktestEngine
+    from core.intraday_validator import IntradaySignalValidator
+    from core.intraday_trader import PreMarketFilter
+except ImportError:
+    from notifier import DingTalkNotifier
+    from monitor_and_notify import StockMonitor
+    from backtest_engine import BacktestEngine
+    from intraday_validator import IntradaySignalValidator
+    from intraday_trader import PreMarketFilter
 
 def run_extraction():
     print("Step 1: Running Bilibili Collector...")
