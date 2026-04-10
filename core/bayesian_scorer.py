@@ -127,6 +127,7 @@ class CreatorCredibilityScorer:
         else:
             params = BayesianParams(alpha=params.alpha, beta=params.beta + w)
         self._state[author] = params
+        self.save_state()
         return params
 
     def score_row(self, row: Dict[str, Any]) -> Tuple[float, float]:
