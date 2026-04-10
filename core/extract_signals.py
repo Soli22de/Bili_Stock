@@ -19,11 +19,9 @@ except ImportError:
 import random
 try:
     from core.bayesian_scorer import CreatorCredibilityScorer
-    from core.ocr_validation import merge_ocr_results
     from core.intraday_validator import IntradaySignalValidator
 except ImportError:
     from bayesian_scorer import CreatorCredibilityScorer
-    from ocr_validation import merge_ocr_results
     from intraday_validator import IntradaySignalValidator
 
 class SignalExtractor:
@@ -235,7 +233,6 @@ class SignalExtractor:
     def process_videos(self, csv_path):
         try:
             df = pd.read_csv(csv_path)
-            print(f"DEBUG: Read CSV {csv_path}, shape: {df.shape}")
         except FileNotFoundError:
             return pd.DataFrame()
 
@@ -267,13 +264,7 @@ class SignalExtractor:
                 if not seg.strip():
                     continue
                 
-                # Debug first few segments
-                if row_count <= 3:
-                    print(f"DEBUG Seg: {seg}")
-
                 stocks = self.find_stocks(seg)
-                if stocks:
-                    print(f"DEBUG: Found stocks in '{seg}': {stocks}")
                 
                 if not stocks:
                     continue
@@ -429,7 +420,6 @@ if __name__ == "__main__":
         # Ensure directory exists
         os.makedirs(os.path.dirname(config.SIGNALS_CSV), exist_ok=True)
         df_signals = scorer.add_scores_to_signals_df(df_signals)
-        df_signals = merge_ocr_results(df_signals)
         df_signals = extractor.enhance_signals(df_signals)
         df_signals.to_csv(config.SIGNALS_CSV, index=False, encoding='utf-8-sig')
         print(f"信号已保存至 {config.SIGNALS_CSV}")

@@ -31,20 +31,8 @@ except ImportError:
     from intraday_trader import PreMarketFilter
 
 def run_extraction():
-    print("Step 1: Running Bilibili Collector...")
-    # Run bili_collector.py as a separate process
-    collector_result = subprocess.run([sys.executable, os.path.join(os.path.dirname(__file__), 'bili_collector.py')], 
-                          capture_output=True, text=True)
-    if collector_result.returncode != 0:
-        print("Error collecting data:")
-        print("STDOUT:", collector_result.stdout)
-        print("STDERR:", collector_result.stderr)
-        return False
-    print(collector_result.stdout)
-
-    print("Step 2: Extracting signals...")
-    # Run extract_signals.py as a separate process
-    result = subprocess.run([sys.executable, os.path.join(os.path.dirname(__file__), 'extract_signals.py')], 
+    print("Step 1: Extracting signals...")
+    result = subprocess.run([sys.executable, os.path.join(os.path.dirname(__file__), 'extract_signals.py')],
                           capture_output=True, text=True)
     if result.returncode != 0:
         print("Error extracting signals:")

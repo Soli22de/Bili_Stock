@@ -6,20 +6,25 @@ import logging
 from datetime import datetime, timedelta
 import hashlib
 import sys
-import os
 
 # Add parent directory to sys.path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # 导入我们的模块
-from core.bili_collector import BiliCollector
-from core.extract_signals import SignalExtractor
-from core.notifier import DingTalkNotifier
-from core.bayesian_scorer import CreatorCredibilityScorer
-from core.ocr_validation import merge_ocr_results
+try:
+    from core.extract_signals import SignalExtractor
+    from core.notifier import DingTalkNotifier
+    from core.bayesian_scorer import CreatorCredibilityScorer
+    from core.data_provider import DataProvider
+    from core.risk_engine import SimpleRiskManager
+except ImportError:
+    from extract_signals import SignalExtractor
+    from notifier import DingTalkNotifier
+    from bayesian_scorer import CreatorCredibilityScorer
+    from data_provider import DataProvider
+    from risk_engine import SimpleRiskManager
+
 import config
-from core.data_provider import DataProvider
-from core.risk_engine import SimpleRiskManager
 
 # 配置日志
 logging.basicConfig(
@@ -38,7 +43,6 @@ from core.realtime_market import get_market_validator
 
 class StockMonitor:
     def __init__(self):
-        self.collector = BiliCollector()
         self.extractor = SignalExtractor(config.STOCK_MAP_PATH)
         self.scorer = CreatorCredibilityScorer()
         self.notifier = DingTalkNotifier(config.DINGTALK_WEBHOOK, config.DINGTALK_SECRET)
@@ -151,22 +155,19 @@ class StockMonitor:
 
     async def run_once(self):
         await self._paper_update_positions()
-        logging.info("Step 1: Running Collector...")
-        await self.collector.run()
 
-        logging.info("Step 2: Extracting Signals...")
+        logging.info("Step 1: Extracting Signals...")
         df_video_signals = self.extractor.process_videos(config.VIDEOS_CSV)
         df_comment_signals = self.extractor.process_comments(config.COMMENTS_CSV)
-        
+
         df_signals = pd.concat([df_video_signals, df_comment_signals], ignore_index=True)
-        
+
         if df_signals.empty:
             logging.info("No signals found.")
             return
 
         # 保存最新的信号文件
         df_signals = self.scorer.add_scores_to_signals_df(df_signals)
-        df_signals = merge_ocr_results(df_signals)
         df_signals = self.extractor.enhance_signals(df_signals)
         df_signals.to_csv(config.SIGNALS_CSV, index=False, encoding='utf-8-sig')
         
