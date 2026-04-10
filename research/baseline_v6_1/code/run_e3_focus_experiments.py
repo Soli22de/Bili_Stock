@@ -16,26 +16,47 @@ from research.baseline_v6_1.code.run_baseline_v6_v61_suite import _apply_costs, 
 
 
 def _load_hs300(start_date: str, end_date: str) -> pd.DataFrame:
-    lg = bs.login()
-    if str(lg.error_code) != "0":
-        raise RuntimeError(f"baostock login failed: {lg.error_msg}")
-    rs = bs.query_history_k_data_plus("sh.000300", "date,close", start_date, end_date, "d")
-    if str(rs.error_code) != "0":
+    try:
+        lg = bs.login()
+        if str(lg.error_code) != "0":
+            raise RuntimeError(f"baostock login failed: {lg.error_msg}")
+        rs = bs.query_history_k_data_plus("sh.000300", "date,close", start_date, end_date, "d")
+        if str(rs.error_code) != "0":
+            bs.logout()
+            raise RuntimeError(f"query_history_k_data_plus failed: {rs.error_msg}")
+        rows = []
+        while rs.error_code == "0" and rs.next():
+            rows.append(rs.get_row_data())
         bs.logout()
-        raise RuntimeError(f"query_history_k_data_plus failed: {rs.error_msg}")
-    rows = []
-    while rs.error_code == "0" and rs.next():
-        rows.append(rs.get_row_data())
-    bs.logout()
-    x = pd.DataFrame(rows, columns=["date", "close"])
-    x["date"] = pd.to_datetime(x["date"], errors="coerce").dt.normalize()
-    x["close"] = pd.to_numeric(x["close"], errors="coerce")
-    x = x.dropna(subset=["date", "close"]).sort_values("date")
-    return x
+        x = pd.DataFrame(rows, columns=["date", "close"])
+        x["date"] = pd.to_datetime(x["date"], errors="coerce").dt.normalize()
+        x["close"] = pd.to_numeric(x["close"], errors="coerce")
+        x = x.dropna(subset=["date", "close"]).sort_values("date")
+        if not x.empty:
+            return x
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning("baostock hs300 failed, using cached proxy: %s", e)
+    # Fallback: load from cached CSI300 proxy equity curve
+    proxy_path = os.path.join(ROOT, "research", "baseline_v6_1", "output", "csi300_proxy_2019_2025.csv")
+    if os.path.exists(proxy_path):
+        p = pd.read_csv(proxy_path)
+        col = [c for c in p.columns if c != "date"][0]
+        p["date"] = pd.to_datetime(p["date"], errors="coerce").dt.normalize()
+        p = p.dropna(subset=["date"]).sort_values("date")
+        p["close"] = pd.to_numeric(p[col], errors="coerce")
+        p = p.dropna(subset=["close"])
+        # Equity curve → synthetic close: set base = 1000
+        p["close"] = p["close"] * 1000.0
+        return p[["date", "close"]]
+    return pd.DataFrame(columns=["date", "close"])
 
 
 def _build_hs_indicators(start_date: str, end_date: str) -> pd.DataFrame:
     hs = _load_hs300(start_date, end_date)
+    if hs.empty:
+        return pd.DataFrame(columns=["date", "hs_ret10", "hs_ret20"])
+    hs = hs.copy()
     hs["hs_ret10"] = hs["close"] / hs["close"].shift(10) - 1.0
     hs["hs_ret20"] = hs["close"] / hs["close"].shift(20) - 1.0
     return hs[["date", "hs_ret10", "hs_ret20"]]

@@ -311,9 +311,9 @@ def _decide(live: pd.DataFrame, base: pd.DataFrame, cycle_bars: int, risk: pd.Da
 
 
 def _bootstrap_live(live_dir: str, days: int):
-    eq_src = os.path.join(ROOT, "research", "baseline_v6_1", "output", "base_E_foundation_group_ret_2010_2025.csv")
-    h_src = os.path.join(ROOT, "research", "baseline_v6_1", "output", "base_E_foundation_holdings_2010_2025.csv")
-    r_src = os.path.join(ROOT, "research", "baseline_v6_1", "output", "base_E_foundation_risk_log_2010_2025.csv")
+    eq_src = os.path.join(ROOT, "research", "baseline_v6_1", "output", "choppy_fix_B_hold12_cap10_group_ret_2010_2025.csv")
+    h_src = os.path.join(ROOT, "research", "baseline_v6_1", "output", "choppy_fix_B_hold12_cap10_holdings_2010_2025.csv")
+    r_src = os.path.join(ROOT, "research", "baseline_v6_1", "output", "choppy_fix_B_hold12_cap10_risk_log_2010_2025.csv")
     if not (os.path.exists(eq_src) and os.path.exists(h_src) and os.path.exists(r_src)):
         raise RuntimeError("bootstrap source files not found")
     eq = pd.read_csv(eq_src)
@@ -480,8 +480,8 @@ def _auto_fill_live_inputs_from_baseline(live_dir: str, baseline_path: str, cycl
     if not dt_set:
         return
 
-    h_src = os.path.join(ROOT, "research", "baseline_v6_1", "output", "base_E_foundation_holdings_2010_2025.csv")
-    r_src = os.path.join(ROOT, "research", "baseline_v6_1", "output", "base_E_foundation_risk_log_2010_2025.csv")
+    h_src = os.path.join(ROOT, "research", "baseline_v6_1", "output", "choppy_fix_B_hold12_cap10_holdings_2010_2025.csv")
+    r_src = os.path.join(ROOT, "research", "baseline_v6_1", "output", "choppy_fix_B_hold12_cap10_risk_log_2010_2025.csv")
 
     h_live = pd.DataFrame()
     if os.path.exists(h_src):
@@ -532,7 +532,7 @@ def _auto_fill_live_inputs_from_baseline(live_dir: str, baseline_path: str, cycl
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--live-dir", default=os.path.join(ROOT, "research", "baseline_v6_1", "output", "live"))
-    ap.add_argument("--baseline", default=os.path.join(ROOT, "research", "baseline_v6_1", "output", "base_E_foundation_group_ret_2010_2025.csv"))
+    ap.add_argument("--baseline", default=os.path.join(ROOT, "research", "baseline_v6_1", "output", "choppy_fix_B_hold12_cap10_group_ret_2010_2025.csv"))
     ap.add_argument("--cycle-bars", type=int, default=12)
     ap.add_argument("--bootstrap-sample-days", type=int, default=0)
     ap.add_argument("--auto-fill-from-baseline", type=int, default=1)
