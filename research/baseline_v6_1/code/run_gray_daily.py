@@ -8,7 +8,11 @@ from datetime import datetime
 import math
 
 
+import sys
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+from research.baseline_v6_1.prod_config import ACTIVE_PATHS
 
 
 def _must_columns(df: pd.DataFrame, cols: List[str], name: str):
@@ -533,7 +537,7 @@ def _auto_fill_live_inputs_from_baseline(live_dir: str, baseline_path: str, cycl
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--live-dir", default=os.path.join(ROOT, "research", "baseline_v6_1", "output", "live"))
-    ap.add_argument("--baseline", default=os.path.join(ROOT, "research", "baseline_v6_1", "output", "choppy_fix_B_hold12_cap10_group_ret_2010_2025.csv"))
+    ap.add_argument("--baseline", default=ACTIVE_PATHS["group_ret"])
     ap.add_argument("--cycle-bars", type=int, default=12)
     ap.add_argument("--bootstrap-sample-days", type=int, default=0)
     ap.add_argument("--auto-fill-from-baseline", type=int, default=1)

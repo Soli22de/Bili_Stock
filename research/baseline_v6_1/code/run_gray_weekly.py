@@ -6,7 +6,11 @@ import pandas as pd
 import math
 
 
+import sys
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+from research.baseline_v6_1.prod_config import ACTIVE_PATHS
 
 
 def _load_live_compare(live_dir: str) -> pd.DataFrame:
@@ -96,7 +100,7 @@ def _kpi_weekly(tr: pd.DataFrame, start_dt: pd.Timestamp, end_dt: pd.Timestamp) 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--live-dir", default=os.path.join(ROOT, "research", "baseline_v6_1", "output", "live"))
-    ap.add_argument("--baseline-ret", default=os.path.join(ROOT, "research", "baseline_v6_1", "output", "choppy_fix_B_hold12_cap10_group_ret_2010_2025.csv"))
+    ap.add_argument("--baseline-ret", default=ACTIVE_PATHS["group_ret"])
     ap.add_argument("--weekly-bars", type=int, default=5)
     args = ap.parse_args()
 

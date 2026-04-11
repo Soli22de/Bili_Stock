@@ -11,7 +11,7 @@ def load_rebalancing_from_db(db_path: str) -> pd.DataFrame:
     conn = sqlite3.connect(db_path)
     try:
         rb = pd.read_sql_query(
-            "SELECT cube_symbol, stock_symbol, stock_name, created_at, updated_at, target_weight, prev_weight_adjusted FROM rebalancing_history",
+            "SELECT cube_symbol, stock_symbol, stock_name, created_at, updated_at, target_weight, prev_weight_adjusted FROM rebalancing_history WHERE status = 'success'",
             conn,
         )
     finally:
