@@ -33,20 +33,15 @@ def _adx(high: pd.Series, low: pd.Series, close: pd.Series, n: int = 14) -> pd.S
 
 def _load_hs300(start_date: str, end_date: str) -> pd.DataFrame:
     """
-    Load HS300 daily OHLCV and compute:
-      - ret20: 20-day return (existing regime signal)
-      - adx14: ADX(14) — trending strength (Huatai top-10 A-share timing signal)
-
-    Regime classification (combined ret20 + ADX):
-      上涨:  ret20 > +2%  AND adx14 > 20  (confirmed uptrend)
-      下跌:  ret20 < -2%  AND adx14 > 20  (confirmed downtrend)
-      震荡:  |ret20| <= 2% OR adx14 <= 20  (sideways / weak directional)
-    Using ADX removes 10-15 day lag from pure ret20 threshold.
+    Load HS300 daily data and classify regime by 20-day return.
+    Tested: ADX(14) combined classifier increases choppy % (35.8% vs 30.8%)
+    and weakens bull/bear IC — pure ret20 threshold performs better.
+    _adx() is kept as a utility for future research.
     """
     lg = bs.login()
     if str(lg.error_code) != "0":
         raise RuntimeError(f"baostock login failed: {lg.error_msg}")
-    rs = bs.query_history_k_data_plus("sh.000300", "date,open,high,low,close", start_date, end_date, "d")
+    rs = bs.query_history_k_data_plus("sh.000300", "date,close", start_date, end_date, "d")
     if str(rs.error_code) != "0":
         bs.logout()
         raise RuntimeError(f"query_history_k_data_plus failed: {rs.error_msg}")
@@ -54,20 +49,15 @@ def _load_hs300(start_date: str, end_date: str) -> pd.DataFrame:
     while rs.error_code == "0" and rs.next():
         rows.append(rs.get_row_data())
     bs.logout()
-    idx = pd.DataFrame(rows, columns=["date", "open", "high", "low", "close"])
+    idx = pd.DataFrame(rows, columns=["date", "close"])
     idx["date"] = pd.to_datetime(idx["date"], errors="coerce").dt.normalize()
-    for c in ["open", "high", "low", "close"]:
-        idx[c] = pd.to_numeric(idx[c], errors="coerce")
-    idx = idx.dropna(subset=["date", "close"]).sort_values("date").reset_index(drop=True)
+    idx["close"] = pd.to_numeric(idx["close"], errors="coerce")
+    idx = idx.dropna(subset=["date", "close"]).sort_values("date")
     idx["ret20"] = idx["close"] / idx["close"].shift(20) - 1.0
-    idx["adx14"] = _adx(idx["high"], idx["low"], idx["close"], n=14)
-    # Combined regime: direction from ret20, conviction from ADX
     idx["regime"] = "震荡"
-    trending = idx["adx14"] > 20
-    idx.loc[trending & (idx["ret20"] > 0.02),  "regime"] = "上涨"
-    idx.loc[trending & (idx["ret20"] < -0.02), "regime"] = "下跌"
-    # Also store adx14 and hs300_ret20 for downstream use
-    return idx[["date", "regime", "adx14"]]
+    idx.loc[idx["ret20"] > 0.02, "regime"] = "上涨"
+    idx.loc[idx["ret20"] < -0.02, "regime"] = "下跌"
+    return idx[["date", "regime"]]
 
 
 def _load_liquidity(liquidity_csv: str) -> pd.DataFrame:
