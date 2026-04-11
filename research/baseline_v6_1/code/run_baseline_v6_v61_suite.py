@@ -37,7 +37,24 @@ def _enrich_from_stock_data(panel: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
         d["stock_symbol"] = s
         d["ret20d_stock_sd"] = d["close_sd"] / d["close_sd"].shift(20) - 1.0
         d["fwd_ret_2w_sd"] = d["close_sd"].shift(-10) / d["close_sd"] - 1.0
-        rows.append(d[["date", "stock_symbol", "close_sd", "amount_sd", "ret20d_stock_sd", "fwd_ret_2w_sd"]])
+        # 量价背离 (volume-price divergence): positive when price falls while volume rises (accumulation)
+        d["vol_price_div5d"] = -(d["close_sd"].rolling(5, min_periods=3).corr(d["amount_sd"]))
+        # 日内反转 (intraday reversal): col index 2 = open price
+        # Documented IC -6 to -8%, ICIR -3.6, win rate 85% in A-shares at 10-20d hold (民生金工/中信建投 2025)
+        open_col = d.columns[2] if len(d.columns) > 2 else None
+        if open_col is not None:
+            open_sd = pd.to_numeric(d.iloc[:, 2], errors="coerce")
+            ret_intra = (d["close_sd"] / open_sd.replace(0, np.nan) - 1.0)
+            d["ret_intra5d"] = ret_intra.rolling(5, min_periods=3).sum()
+        else:
+            d["ret_intra5d"] = np.nan
+        # HV ratio: 20-day vs 60-day historical vol. < 1.0 = volatility contracting (calm entry, 选股策略 gate_hv)
+        daily_ret = d["close_sd"].pct_change()
+        hv20 = daily_ret.rolling(20, min_periods=10).std()
+        hv60 = daily_ret.rolling(60, min_periods=20).std()
+        d["hv20_hv60_ratio"] = hv20 / hv60.replace(0, np.nan)
+        rows.append(d[["date", "stock_symbol", "close_sd", "amount_sd", "ret20d_stock_sd", "fwd_ret_2w_sd",
+                        "vol_price_div5d", "ret_intra5d", "hv20_hv60_ratio"]])
         px_map[s] = d[["date", "close_sd"]].dropna().reset_index(drop=True)
     if rows:
         p = pd.concat(rows, ignore_index=True)
@@ -48,25 +65,159 @@ def _enrich_from_stock_data(panel: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
         x["amount"] = x["amount"].fillna(x["amount_sd"])
         x["ret20d_stock"] = x["ret20d_stock"].fillna(x["ret20d_stock_sd"])
         x["fwd_ret_2w"] = x["fwd_ret_2w"].fillna(x["fwd_ret_2w_sd"])
+        # vol_price_div5d, ret_intra5d, hv20_hv60_ratio arrive directly from merge
         x = x.drop(columns=["close_sd", "amount_sd", "ret20d_stock_sd", "fwd_ret_2w_sd"], errors="ignore")
     return x, px_map
 
 
-def _pick_top(day: pd.DataFrame, regime: str, cap_non_up: float, cap_up: float, non_up_vol_q: float = 1.0) -> pd.DataFrame:
+def _srf_score(day: pd.DataFrame) -> pd.Series:
+    """
+    SmartResonanceFactor: composite ranking score for Top-K selection.
+    Adapted from 选股策略 4-factor model for Xueqiu smart-money data.
+
+    Components (all z-scored cross-sectionally within the day):
+      40%  factor_z_neu        — smart-money consensus signal (analogous to main_net_inflow)
+      30%  ret20d_stock        — 20-day price momentum (technical strength)
+      20%  amount              — trading volume proxy (volume confirmation)
+      10%  net_buy_cube_count  — same-day buying pulse (analogous to DDX acceleration)
+    """
+    def _z(s: pd.Series) -> pd.Series:
+        std = s.std()
+        return (s - s.mean()) / (std if std > 1e-9 else 1.0)
+
+    f = _z(pd.to_numeric(day["factor_z_neu"], errors="coerce").fillna(0.0))
+    p = _z(pd.to_numeric(day["ret20d_stock"], errors="coerce").fillna(0.0)) if "ret20d_stock" in day.columns else pd.Series(0.0, index=day.index)
+    v = _z(pd.to_numeric(day["amount"], errors="coerce").fillna(0.0)) if "amount" in day.columns else pd.Series(0.0, index=day.index)
+    c = _z(pd.to_numeric(day["net_buy_cube_count"], errors="coerce").fillna(0.0)) if "net_buy_cube_count" in day.columns else pd.Series(0.0, index=day.index)
+    return 0.40 * f + 0.30 * p + 0.20 * v + 0.10 * c
+
+
+def _srf_score_v2(day: pd.DataFrame) -> pd.Series:
+    """
+    SmartResonanceFactor v2 — re-ranker within the Xueqiu top-30% pool.
+
+    Research-backed weights (corrected 2026-04-11):
+      55%  factor_z_neu     — Xueqiu smart-money consensus (dominant, proven alpha)
+      20%  +ret20d_stock    — mild momentum (within-holdings corr is +0.016 to +0.067, not reversal)
+      15%  -ret_intra5d     — 日内反转: inverted 5-day cumulative intraday return
+                              IC -6 to -8%, ICIR -3.6, win rate 85% (民生金工/中信建投 2025)
+      10%  vol_price_div5d  — 量价背离: -corr(close, vol, 5d), IC 4-6% (国金证券 2022)
+
+    HV penalty: stocks with hv20/hv60 > 1.5 (vol expanding) penalised -0.5σ
+    (from 选股策略 gate_hv: only enter when HV20 < HV60)
+    """
+    def _z(s: pd.Series) -> pd.Series:
+        std = s.std()
+        return (s - s.mean()) / (std if std > 1e-9 else 1.0)
+
+    f     = _z(pd.to_numeric(day["factor_z_neu"],    errors="coerce").fillna(0.0))
+    mom   = _z(pd.to_numeric(day["ret20d_stock"],    errors="coerce").fillna(0.0)) if "ret20d_stock"    in day.columns else pd.Series(0.0, index=day.index)
+    intra = _z(-pd.to_numeric(day["ret_intra5d"],    errors="coerce").fillna(0.0)) if "ret_intra5d"    in day.columns else pd.Series(0.0, index=day.index)
+    div   = _z(pd.to_numeric(day["vol_price_div5d"], errors="coerce").fillna(0.0)) if "vol_price_div5d" in day.columns else pd.Series(0.0, index=day.index)
+    score = 0.55 * f + 0.20 * mom + 0.15 * intra + 0.10 * div
+    # HV penalty: expanding-vol stocks get a half-sigma deduction
+    if "hv20_hv60_ratio" in day.columns:
+        hv_ratio = pd.to_numeric(day["hv20_hv60_ratio"], errors="coerce").fillna(1.0)
+        score = score - (hv_ratio > 1.5).astype(float) * 0.5
+    return score
+
+
+def _pick_top(
+    day: pd.DataFrame,
+    regime: str,
+    cap_non_up: float,
+    cap_up: float,
+    non_up_vol_q: float = 1.0,
+    top_k: int | None = None,
+    use_srf: bool = False,
+    use_srf_v2: bool = False,
+) -> pd.DataFrame:
     n = len(day)
     if regime == "上涨":
         n_pool = max(1, int(round(0.5 * n)))
         pool = _select_top_with_industry_cap(day, n_target=n_pool, cap_ratio=cap_up)
-        n_pick = max(1, int(round(0.3 * n)))
+        n_pick = max(1, int(round(0.3 * n))) if top_k is None else min(top_k, len(pool))
         top = pool.sort_values("ret20d_stock", ascending=True).head(n_pick).copy()
         if not top.empty:
             top = _select_top_with_industry_cap(top, n_target=len(top), cap_ratio=cap_up)
         return top
+    if use_srf:
+        day = day.copy()
+        day["srf_score"] = _srf_score(day).values
+        n_pick = top_k if top_k is not None else max(1, int(round(0.3 * n)))
+        n_pick = min(n_pick, n)
+        if float(non_up_vol_q) < 0.999 and "ret20d_stock" in day.columns:
+            vol_proxy = pd.to_numeric(day["ret20d_stock"], errors="coerce").abs()
+            valid = vol_proxy.dropna()
+            if len(valid) >= 5:
+                cut = float(valid.quantile(max(min(float(non_up_vol_q), 0.99), 0.50)))
+                # NaN vol → treated as infinite (unknown = risky → filtered out)
+                day = day[vol_proxy.fillna(float("inf")) <= cut].copy()
+                n_pick = min(n_pick, len(day))
+        if day.empty:
+            return day
+        cap_n = max(1, int(np.floor(n_pick * cap_non_up)))
+        cand = day.sort_values("srf_score", ascending=False)
+        picked_idx: list = []
+        cnt: dict = {}
+        for idx, row in cand.iterrows():
+            ind = str(row.get("industry_l2", "其他"))
+            if cnt.get(ind, 0) < cap_n:
+                picked_idx.append(idx)
+                cnt[ind] = cnt.get(ind, 0) + 1
+            if len(picked_idx) >= n_pick:
+                break
+        if len(picked_idx) < n_pick:
+            for idx, _ in cand.iterrows():
+                if idx not in picked_idx:
+                    picked_idx.append(idx)
+                if len(picked_idx) >= n_pick:
+                    break
+        return day.loc[picked_idx].copy()
+    if use_srf_v2:
+        # Step 1: Xueqiu gate — same rank>=0.7 filter as baseline
+        raw = day[day["rank"] >= 0.7].copy()
+        if raw.empty:
+            return raw
+        # Step 2: Vol filter — identical to baseline path
+        if float(non_up_vol_q) < 0.999 and "ret20d_stock" in raw.columns:
+            vol_proxy = pd.to_numeric(raw["ret20d_stock"], errors="coerce").abs()
+            valid = vol_proxy.dropna()
+            if len(valid) >= 5:
+                cut = float(valid.quantile(max(min(float(non_up_vol_q), 0.99), 0.50)))
+                raw = raw[vol_proxy.fillna(float("inf")) <= cut].copy()
+        if raw.empty:
+            return raw
+        # Step 3: Re-rank within gate by SRF v2 (reversal + divergence, no momentum)
+        raw = raw.copy()
+        raw["srf_v2_score"] = _srf_score_v2(raw).values
+        n_pool = len(raw)
+        n_pick = min(int(top_k), n_pool) if top_k is not None else n_pool
+        cap_n = max(1, int(np.floor(n_pick * cap_non_up)))
+        cand = raw.sort_values("srf_v2_score", ascending=False)
+        picked_idx: list = []
+        cnt: dict = {}
+        for idx, row in cand.iterrows():
+            ind = str(row.get("industry_l2", "其他"))
+            if cnt.get(ind, 0) < cap_n:
+                picked_idx.append(idx)
+                cnt[ind] = cnt.get(ind, 0) + 1
+            if len(picked_idx) >= n_pick:
+                break
+        if len(picked_idx) < n_pick:
+            for idx, _ in cand.iterrows():
+                if idx not in picked_idx:
+                    picked_idx.append(idx)
+                if len(picked_idx) >= n_pick:
+                    break
+        return raw.loc[picked_idx].copy()
     raw = day[day["rank"] >= 0.7].copy()
     if not raw.empty and float(non_up_vol_q) < 0.999 and "ret20d_stock" in raw.columns:
-        vol_proxy = raw["ret20d_stock"].abs()
-        cut = float(vol_proxy.quantile(max(min(float(non_up_vol_q), 0.99), 0.50)))
-        raw = raw[vol_proxy <= cut].copy()
+        vol_proxy = pd.to_numeric(raw["ret20d_stock"], errors="coerce").abs()
+        valid = vol_proxy.dropna()
+        if len(valid) >= 5:
+            cut = float(valid.quantile(max(min(float(non_up_vol_q), 0.99), 0.50)))
+            raw = raw[vol_proxy.fillna(float("inf")) <= cut].copy()
     if raw.empty:
         return raw
     return _select_top_with_industry_cap(raw, n_target=len(raw), cap_ratio=cap_non_up)
@@ -128,6 +279,9 @@ def _build_rebalance(
     cooldown_ind_steps: int = 2,
     cooldown_stock_steps: int = 1,
     non_up_vol_q: float = 1.0,
+    top_k: int | None = None,
+    use_srf: bool = False,
+    use_srf_v2: bool = False,
     overheat_hs_trigger: float = 0.05,
     overheat_ind_trigger: float = 0.08,
     overheat_turn_q: float = 0.90,
@@ -222,7 +376,7 @@ def _build_rebalance(
         regime = str(day["regime"].iloc[0])
         cap_non_up_use = max(float(cap_non_up), float(overheat_cap_non_up)) if overheat_on else float(cap_non_up)
         cap_up_use = max(float(cap_up), float(overheat_cap_up)) if overheat_on else float(cap_up)
-        top = _pick_top(day, regime, cap_non_up=cap_non_up_use, cap_up=cap_up_use, non_up_vol_q=non_up_vol_q)
+        top = _pick_top(day, regime, cap_non_up=cap_non_up_use, cap_up=cap_up_use, non_up_vol_q=non_up_vol_q, top_k=top_k, use_srf=use_srf, use_srf_v2=use_srf_v2)
         if xq_enable and not top.empty:
             top = top.copy()
             top["xq_heat_chg"] = _xq_heat_change(top)
@@ -437,7 +591,8 @@ def _metrics(x: pd.DataFrame) -> dict:
     cvar95 = float(neg[neg <= neg.quantile(0.05)].mean()) if not neg.empty else np.nan
     sharpe = ann_ret / ann_vol if (pd.notna(ann_vol) and ann_vol > 0) else np.nan
     sortino = ann_ret / ann_downside if (pd.notna(ann_downside) and ann_downside > 0) else np.nan
-    calmar = ann_ret / abs(mdd) if (pd.notna(ann_ret) and not pd.isna(mdd) and mdd != 0) else float("nan")
+    # mdd==0 means risk controls zeroed the strategy (spread flat) → calmar = 0 (degenerate, not infinite)
+    calmar = ann_ret / abs(mdd) if (pd.notna(ann_ret) and pd.notna(mdd) and mdd != 0) else (0.0 if (pd.notna(ann_ret) and pd.notna(mdd)) else float("nan"))
     turnover = float(d["one_way_turnover"].mean()) if "one_way_turnover" in d.columns and not d.empty else np.nan
     dd_flag = dd < 0
     dur = []
@@ -572,6 +727,9 @@ def _run_one(
         "xq_warn_drop": 0.25,
         "xq_recover_rise": 0.10,
         "xq_require_neg_ret": True,
+        "top_k": None,
+        "use_srf": False,
+        "use_srf_v2": False,
     }
     if risk_cfg:
         cfg.update(risk_cfg)
@@ -600,6 +758,9 @@ def _run_one(
         xq_warn_drop=float(cfg["xq_warn_drop"]),
         xq_recover_rise=float(cfg["xq_recover_rise"]),
         xq_require_neg_ret=bool(cfg["xq_require_neg_ret"]),
+        top_k=cfg["top_k"],
+        use_srf=bool(cfg["use_srf"]),
+        use_srf_v2=bool(cfg["use_srf_v2"]),
     )
     ret = _apply_costs(reb, one_way_cost=0.001)
     ret, risk_log_dyn = _apply_risk_controls(

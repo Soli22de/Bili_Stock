@@ -310,10 +310,11 @@ def _decide(live: pd.DataFrame, base: pd.DataFrame, cycle_bars: int, risk: pd.Da
     )
 
 
-def _bootstrap_live(live_dir: str, days: int):
-    eq_src = os.path.join(ROOT, "research", "baseline_v6_1", "output", "choppy_fix_B_hold12_cap10_group_ret_2010_2025.csv")
-    h_src = os.path.join(ROOT, "research", "baseline_v6_1", "output", "choppy_fix_B_hold12_cap10_holdings_2010_2025.csv")
-    r_src = os.path.join(ROOT, "research", "baseline_v6_1", "output", "choppy_fix_B_hold12_cap10_risk_log_2010_2025.csv")
+def _bootstrap_live(live_dir: str, days: int, baseline_path: str | None = None):
+    out_dir = os.path.join(ROOT, "research", "baseline_v6_1", "output")
+    eq_src = baseline_path or os.path.join(out_dir, "choppy_fix_B_hold12_cap10_group_ret_2010_2025.csv")
+    h_src = eq_src.replace("_group_ret_", "_holdings_")
+    r_src = eq_src.replace("_group_ret_", "_risk_log_")
     if not (os.path.exists(eq_src) and os.path.exists(h_src) and os.path.exists(r_src)):
         raise RuntimeError("bootstrap source files not found")
     eq = pd.read_csv(eq_src)
@@ -480,8 +481,8 @@ def _auto_fill_live_inputs_from_baseline(live_dir: str, baseline_path: str, cycl
     if not dt_set:
         return
 
-    h_src = os.path.join(ROOT, "research", "baseline_v6_1", "output", "choppy_fix_B_hold12_cap10_holdings_2010_2025.csv")
-    r_src = os.path.join(ROOT, "research", "baseline_v6_1", "output", "choppy_fix_B_hold12_cap10_risk_log_2010_2025.csv")
+    h_src = baseline_path.replace("_group_ret_", "_holdings_")
+    r_src = baseline_path.replace("_group_ret_", "_risk_log_")
 
     h_live = pd.DataFrame()
     if os.path.exists(h_src):
@@ -542,7 +543,7 @@ def main():
 
     os.makedirs(args.live_dir, exist_ok=True)
     if int(args.bootstrap_sample_days) > 0:
-        _bootstrap_live(args.live_dir, int(args.bootstrap_sample_days))
+        _bootstrap_live(args.live_dir, int(args.bootstrap_sample_days), baseline_path=args.baseline)
     if int(args.auto_fill_from_baseline) > 0:
         _auto_fill_live_inputs_from_baseline(args.live_dir, args.baseline, int(args.cycle_bars), int(args.stale_days))
 
