@@ -24,21 +24,28 @@ def build_rebalance_momentum_factor(
     lag_days: int = 14,
     smoothing_days: int = 3,
     factor_mode: str = "rate",
+    signal_mode: str = "count",
 ) -> pd.DataFrame:
+    """
+    signal_mode:
+      "count"    — COUNT(DISTINCT cube) where buy (original)
+      "net_flow" — SUM(weight_delta) for all trades (buys + sells)
+                   IC=0.0038 overall, choppy IC=+0.0052 (vs -0.0015 for count)
+    """
     req = {"cube_symbol", "stock_symbol", "target_weight", "prev_weight_adjusted"}
     # 兼容 created_at 或 updated_at
     time_col = "created_at" if "created_at" in rebalancing_df.columns else "updated_at"
     req.add(time_col)
-    
+
     miss = req - set(rebalancing_df.columns)
     if miss:
         raise ValueError(f"rebalancing_history 缺少字段: {sorted(miss)}")
     rb = rebalancing_df.copy()
-    
+
     # 统一时间列名
     if time_col != "created_at":
         rb.rename(columns={time_col: "created_at"}, inplace=True)
-        
+
     rb["date"] = pd.to_datetime(rb["created_at"], errors="coerce").dt.normalize()
     rb["target_weight"] = pd.to_numeric(rb["target_weight"], errors="coerce")
     rb["prev_weight_adjusted"] = pd.to_numeric(rb["prev_weight_adjusted"], errors="coerce")
@@ -47,11 +54,20 @@ def build_rebalance_momentum_factor(
     end_dt = pd.to_datetime(end_date).normalize()
     rb = rb[(rb["date"] >= start_dt) & (rb["date"] <= end_dt)].copy()
     rb["weight_delta"] = rb["target_weight"] - rb["prev_weight_adjusted"]
-    buy = rb[rb["weight_delta"] > 0].copy()
-    buy["cube_symbol"] = buy["cube_symbol"].astype(str)
-    buy["stock_symbol"] = buy["stock_symbol"].astype(str)
-    daily = buy.groupby(["date", "stock_symbol"], as_index=False)["cube_symbol"].nunique()
-    daily.rename(columns={"cube_symbol": "net_buy_cube_count"}, inplace=True)
+    rb["cube_symbol"] = rb["cube_symbol"].astype(str)
+    rb["stock_symbol"] = rb["stock_symbol"].astype(str)
+
+    if signal_mode == "net_flow":
+        # Net flow: SUM(weight_delta) across all trades (buys positive, sells negative)
+        clip_val = rb["weight_delta"].abs().quantile(0.99)
+        rb["wd_clipped"] = rb["weight_delta"].clip(lower=-clip_val, upper=clip_val)
+        daily = rb.groupby(["date", "stock_symbol"], as_index=False)["wd_clipped"].sum()
+        daily.rename(columns={"wd_clipped": "net_buy_cube_count"}, inplace=True)
+    else:
+        # Original: count distinct buying cubes
+        buy = rb[rb["weight_delta"] > 0].copy()
+        daily = buy.groupby(["date", "stock_symbol"], as_index=False)["cube_symbol"].nunique()
+        daily.rename(columns={"cube_symbol": "net_buy_cube_count"}, inplace=True)
     if daily.empty:
         return pd.DataFrame(columns=["date", "stock_symbol", "net_buy_cube_count", "count_lag", "factor_raw", "factor_z"])
     rows = []

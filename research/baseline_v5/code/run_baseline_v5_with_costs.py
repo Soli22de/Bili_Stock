@@ -49,7 +49,7 @@ def _load_tradability_from_stock_data(root: str) -> pd.DataFrame:
     return x[["date", "stock_symbol", "is_suspended", "is_limit"]]
 
 
-def _prepare_panel_v5(start_date: str = "2010-01-01", end_date: str = "2025-12-31") -> pd.DataFrame:
+def _prepare_panel_v5(start_date: str = "2010-01-01", end_date: str = "2025-12-31", signal_mode: str = "count") -> pd.DataFrame:
     stock_data_dir = os.path.join(ROOT, "data", "stock_data")
     market_cache_dir = os.path.join(ROOT, "data", "market_cache")
     cache_dir = stock_data_dir if os.path.exists(stock_data_dir) and len(glob.glob(os.path.join(stock_data_dir, "*.csv"))) > 0 else market_cache_dir
@@ -62,6 +62,7 @@ def _prepare_panel_v5(start_date: str = "2010-01-01", end_date: str = "2025-12-3
         lag_days=14,
         smoothing_days=3,
         factor_mode="rate",
+        signal_mode=signal_mode,
     )
     base = _attach_base_fields(
         panel,

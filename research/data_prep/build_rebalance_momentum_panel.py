@@ -127,6 +127,7 @@ def build_rebalance_momentum_panel(
     lag_days: int = 14,
     smoothing_days: int = 3,
     factor_mode: str = "rate",
+    signal_mode: str = "count",
 ) -> pd.DataFrame:
     start_dt = pd.to_datetime(start_date).normalize()
     end_dt = pd.to_datetime(end_date).normalize()
@@ -138,6 +139,7 @@ def build_rebalance_momentum_panel(
         lag_days=lag_days,
         smoothing_days=smoothing_days,
         factor_mode=factor_mode,
+        signal_mode=signal_mode,
     )
     if factor.empty:
         print("Warning: Factor calculation returned empty result.")
