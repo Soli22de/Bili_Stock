@@ -63,8 +63,8 @@ def _load_hs300(start_date: str, end_date: str) -> pd.DataFrame:
         idx = idx.dropna(subset=["date", "close"]).sort_values("date")
         idx["ret20"] = idx["close"] / idx["close"].shift(20) - 1.0
         idx["regime"] = "震荡"
-        idx.loc[idx["ret20"] > 0.02, "regime"] = "上涨"
-        idx.loc[idx["ret20"] < -0.02, "regime"] = "下跌"
+        idx.loc[idx["ret20"] > 0.03, "regime"] = "上涨"
+        idx.loc[idx["ret20"] < -0.03, "regime"] = "下跌"
         idx["hs300_ret20"] = idx["ret20"]
         print(f"HS300: fetched from baostock ({len(idx)} rows) — run build_data_foundation.py to cache")
     start_dt = pd.to_datetime(start_date).normalize()
