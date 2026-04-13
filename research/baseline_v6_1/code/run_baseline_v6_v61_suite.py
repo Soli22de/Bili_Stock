@@ -514,7 +514,8 @@ def _apply_risk_controls(
     if ret is None or ret.empty:
         return ret, pd.DataFrame(columns=["date", "trigger_type", "subject", "value", "new_risk_scale", "recover_flag"])
     x = ret.sort_values("date").reset_index(drop=True).copy()
-    spread = (x["Top30_net"] - x["Bottom30"]).fillna(0.0)
+    # A-share LONG-ONLY: risk controls based on Top30 return (what we actually hold)
+    top_ret = x["Top30_net"].fillna(0.0)
     curve = 1.0
     peak = 1.0
     scales = []
@@ -545,8 +546,8 @@ def _apply_risk_controls(
         risk_scale = float(min(market_scale, dd_scale))
         if str(r.get("regime", "")) == "震荡":
             if go_flat_choppy:
-                risk_scale = 0.0  # true go-flat: zero ALL choppy periods
-            elif float(spread.iloc[i]) < 0:
+                risk_scale = 0.0
+            elif float(top_ret.iloc[i]) < 0:
                 risk_scale = float(min(risk_scale, max(min(float(choppy_loss_scale), 1.0), float(choppy_loss_floor))))
         scales.append(risk_scale)
         reasons.append(reason if reason else ("drawdown_brake" if dd_scale < 1.0 else "none"))
@@ -561,10 +562,11 @@ def _apply_risk_controls(
                     "recover_flag": bool(risk_scale >= 0.99),
                 }
             )
-        sp = float(spread.iloc[i]) * risk_scale
-        curve = curve * (1.0 + sp)
+        # Apply risk scale to Top30 return (long-only)
+        scaled_ret = float(top_ret.iloc[i]) * risk_scale
+        curve = curve * (1.0 + scaled_ret)
         peak = max(peak, curve)
-        x.loc[i, "Top30_net"] = float(r["Bottom30"]) + sp
+        x.loc[i, "Top30_net"] = scaled_ret
     x["risk_scale"] = scales
     x["risk_reason"] = reasons
     risk_log = pd.DataFrame(risk_rows) if risk_rows else pd.DataFrame(columns=["date", "trigger_type", "subject", "value", "new_risk_scale", "recover_flag"])
@@ -591,23 +593,24 @@ def _metrics(x: pd.DataFrame) -> dict:
             out[f"{rg}_top_bottom"] = np.nan
         return out
     d = x.sort_values("date").copy()
-    spread = d["Top30_net"] - d["Bottom30"]
-    curve = (1 + spread.fillna(0)).cumprod()
+    # A-share: LONG-ONLY. Use Top30_net as the strategy return.
+    # Top30_net = Top30 after costs and risk scaling
+    ret_series = d["Top30_net"].fillna(0)
+    curve = (1 + ret_series).cumprod()
     peak = curve.cummax()
     dd = curve / peak - 1.0
     mdd = float(dd.min()) if not dd.empty else float("nan")
-    ann_factor = 26.0
-    avg = float(spread.mean()) if not spread.empty else np.nan
-    vol = float(spread.std(ddof=0)) if not spread.empty else np.nan
+    ann_factor = 252.0 / 12.0  # ~21 trading days per period
+    avg = float(ret_series.mean()) if not ret_series.empty else np.nan
+    vol = float(ret_series.std(ddof=0)) if not ret_series.empty else np.nan
     ann_ret = float((1.0 + avg) ** ann_factor - 1.0) if pd.notna(avg) else np.nan
     ann_vol = float(vol * np.sqrt(ann_factor)) if pd.notna(vol) else np.nan
-    neg = spread[spread < 0]
+    neg = ret_series[ret_series < 0]
     downside = float(np.sqrt((neg.pow(2).mean()))) if not neg.empty else 0.0
     ann_downside = float(downside * np.sqrt(ann_factor))
     cvar95 = float(neg[neg <= neg.quantile(0.05)].mean()) if not neg.empty else np.nan
     sharpe = ann_ret / ann_vol if (pd.notna(ann_vol) and ann_vol > 0) else np.nan
     sortino = ann_ret / ann_downside if (pd.notna(ann_downside) and ann_downside > 0) else np.nan
-    # mdd==0 means risk controls zeroed the strategy (spread flat) → calmar = 0 (degenerate, not infinite)
     calmar = ann_ret / abs(mdd) if (pd.notna(ann_ret) and pd.notna(mdd) and mdd != 0) else (0.0 if (pd.notna(ann_ret) and pd.notna(mdd)) else float("nan"))
     turnover = float(d["one_way_turnover"].mean()) if "one_way_turnover" in d.columns and not d.empty else np.nan
     dd_flag = dd < 0
@@ -622,6 +625,8 @@ def _metrics(x: pd.DataFrame) -> dict:
     if cur > 0:
         dur.append(cur)
     mdd_duration = float(max(dur)) if dur else 0.0
+    # Hit ratio: exclude go-flat (zero return) periods
+    active = ret_series[ret_series != 0]
     out = {
         "ann_ret": ann_ret,
         "ann_vol": ann_vol,
@@ -629,19 +634,20 @@ def _metrics(x: pd.DataFrame) -> dict:
         "sortino": sortino,
         "calmar": calmar,
         "mdd": mdd,
-        # Exclude go-flat periods (spread==0) from hit ratio — they are not trades
-        "hit_ratio": float((spread[spread != 0] > 0).mean()) if (spread != 0).any() else np.nan,
-        "hit_ratio_raw": float((d["Top30_net"] > d["Bottom30"]).mean()),
-        "go_flat_ratio": float((spread == 0).mean()),
-        "excess": float(spread.mean()),
+        "hit_ratio": float((active > 0).mean()) if len(active) > 0 else np.nan,
+        "go_flat_ratio": float((ret_series == 0).mean()),
+        "excess": float(ret_series.mean()),
         "turnover": turnover,
         "downside_dev": ann_downside,
         "mdd_duration_periods": mdd_duration,
         "cvar95": cvar95,
     }
+    # Long-short spread metrics (for reference only — not executable in A-shares)
+    ls_spread = d["Top30_net"] - d["Bottom30"]
+    out["ls_spread_mean"] = float(ls_spread.mean()) if not ls_spread.empty else np.nan
     for rg in ["上涨", "震荡", "下跌"]:
         s = d[d["regime"] == rg]
-        out[f"{rg}_top_bottom"] = float((s["Top30_net"] - s["Bottom30"]).mean()) if not s.empty else np.nan
+        out[f"{rg}_top_ret"] = float(s["Top30_net"].mean()) if not s.empty else np.nan
     return out
 
 
