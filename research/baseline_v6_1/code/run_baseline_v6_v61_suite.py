@@ -468,11 +468,14 @@ def _build_rebalance(
     return reb, hold, tp_event, risk_log
 
 
-def _apply_costs(group_ret: pd.DataFrame, one_way_cost: float = 0.001, impact_cost: float | None = None) -> pd.DataFrame:
+def _apply_costs(group_ret: pd.DataFrame, one_way_cost: float = 0.004) -> pd.DataFrame:
+    """
+    Apply realistic A-share trading costs.
+    Default one_way_cost=0.4% (40bp) = commission 3bp + stamp tax 10bp + transfer 0.2bp + slippage ~27bp
+    Both buy and sell incur cost, so round-trip = 2 * one_way_cost per turnover.
+    """
     if group_ret is None or group_ret.empty:
         return pd.DataFrame(columns=["date", "regime", "Bottom30", "Middle40", "Top30", "top_symbols", "one_way_turnover", "trade_cost_rate", "Top30_net"])
-    if impact_cost is not None:
-        one_way_cost = float(impact_cost)
     x = group_ret.copy().sort_values("date").reset_index(drop=True)
     costs = []
     turnovers = []
@@ -486,7 +489,8 @@ def _apply_costs(group_ret: pd.DataFrame, one_way_cost: float = 0.001, impact_co
             base_n = max(len(cur), 1)
             one_way_turnover = 1.0 - overlap / base_n
         turnovers.append(one_way_turnover)
-        costs.append(one_way_turnover * one_way_cost)
+        # Round-trip: sell old positions + buy new positions
+        costs.append(one_way_turnover * one_way_cost * 2)
         prev = cur
     x["one_way_turnover"] = turnovers
     x["trade_cost_rate"] = costs
@@ -789,7 +793,7 @@ def _run_one(
         use_srf=bool(cfg["use_srf"]),
         use_srf_v2=bool(cfg["use_srf_v2"]),
     )
-    ret = _apply_costs(reb, one_way_cost=0.001)
+    ret = _apply_costs(reb, one_way_cost=float(cfg.get("one_way_cost", 0.004)))
     ret, risk_log_dyn = _apply_risk_controls(
         ret,
         market_hot_q_mid=float(cfg["market_hot_q_mid"]),
