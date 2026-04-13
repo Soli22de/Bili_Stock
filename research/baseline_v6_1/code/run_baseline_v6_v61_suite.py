@@ -305,7 +305,9 @@ def _build_rebalance(
     cfg_hold_bonus: float = 0.0,
 ):
     df = panel.dropna(subset=["date", "stock_symbol", "factor_z_raw", "factor_z_neu", "fwd_ret_2w"]).copy()
-    df = df[(df["date"] >= pd.Timestamp("2010-01-01")) & (df["date"] <= pd.Timestamp("2025-12-31"))].copy()
+    # Cubes data starts late 2014; 2014 has only 34 trades (too sparse).
+    # Honest backtest starts 2015 to ensure meaningful signal.
+    df = df[(df["date"] >= pd.Timestamp("2015-01-01")) & (df["date"] <= pd.Timestamp("2025-12-31"))].copy()
     # Bull: contrarian (-factor_z_raw) — consensus picks are overbought; IC only +0.001
     # Choppy/Bear: momentum (factor_z_neu) — follow smart money; IC +0.010 in bear
     df["factor_use"] = np.where(df["regime"] == "上涨", -df["factor_z_raw"], df["factor_z_neu"])
@@ -531,8 +533,12 @@ def _apply_risk_controls(
     x = ret.sort_values("date").reset_index(drop=True).copy()
     # A-share LONG-ONLY: risk controls based on Top30 return (what we actually hold)
     top_ret = x["Top30_net"].fillna(0.0)
+    buy_cost = float(x.attrs.get("buy_cost", 0.0013)) if hasattr(x, "attrs") else 0.0013
+    sell_cost = float(x.attrs.get("sell_cost", 0.0043)) if hasattr(x, "attrs") else 0.0043
     curve = 1.0
     peak = 1.0
+    prev_ret = 0.0  # previous period return (for choppy decision — NO look-ahead)
+    prev_scale = 1.0  # track scale changes for transition costs
     scales = []
     reasons = []
     risk_rows = []
@@ -562,7 +568,9 @@ def _apply_risk_controls(
         if str(r.get("regime", "")) == "震荡":
             if go_flat_choppy:
                 risk_scale = 0.0
-            elif float(top_ret.iloc[i]) < 0:
+            elif prev_ret < 0:
+                # Use PREVIOUS period return to decide — NO look-ahead bias
+                # Old code used top_ret.iloc[i] (current period's future return) = look-ahead!
                 risk_scale = float(min(risk_scale, max(min(float(choppy_loss_scale), 1.0), float(choppy_loss_floor))))
         scales.append(risk_scale)
         reasons.append(reason if reason else ("drawdown_brake" if dd_scale < 1.0 else "none"))
@@ -577,11 +585,19 @@ def _apply_risk_controls(
                     "recover_flag": bool(risk_scale >= 0.99),
                 }
             )
+        # Transition cost: going flat (sell all) or re-entering (buy all)
+        transition_cost = 0.0
+        if prev_scale > 0 and risk_scale == 0:
+            transition_cost = sell_cost  # liquidate entire portfolio
+        elif prev_scale == 0 and risk_scale > 0:
+            transition_cost = buy_cost  # re-enter from cash
         # Apply risk scale to Top30 return (long-only)
-        scaled_ret = float(top_ret.iloc[i]) * risk_scale
+        scaled_ret = float(top_ret.iloc[i]) * risk_scale - transition_cost
         curve = curve * (1.0 + scaled_ret)
         peak = max(peak, curve)
         x.loc[i, "Top30_net"] = scaled_ret
+        prev_ret = float(top_ret.iloc[i])  # store for next period's choppy decision
+        prev_scale = risk_scale
     x["risk_scale"] = scales
     x["risk_reason"] = reasons
     risk_log = pd.DataFrame(risk_rows) if risk_rows else pd.DataFrame(columns=["date", "trigger_type", "subject", "value", "new_risk_scale", "recover_flag"])

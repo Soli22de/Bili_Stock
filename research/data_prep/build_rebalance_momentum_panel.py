@@ -114,15 +114,10 @@ def load_price_panel(
     return out
 
 
-def add_forward_returns(px: pd.DataFrame, horizon_days: int = 10) -> pd.DataFrame:
+def add_forward_returns(px: pd.DataFrame, horizon_days: int = 12) -> pd.DataFrame:
+    """Forward return matching hold_step=12 trading days."""
     out = px.copy()
-    # Ensure sorted
     out = out.sort_values(["stock_symbol", "date"])
-    
-    # Shift(-10) means look 10 rows ahead.
-    # If the data is daily trading days, this is exactly 2 weeks (10 trading days).
-    # But if there are missing days, it might be > 2 weeks.
-    # Assuming daily data is continuous trading days.
     out["fwd_ret_2w"] = out.groupby("stock_symbol")["close"].transform(lambda s: s.shift(-horizon_days) / s - 1.0)
     return out
 
