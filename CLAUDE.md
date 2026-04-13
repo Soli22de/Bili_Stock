@@ -10,27 +10,25 @@ A-share **LONG-ONLY** quant system tracking Xueqiu smart-money consensus signals
 
 ---
 
-## Production Performance (Honest Numbers)
+## Production Performance (Honest Numbers — NO look-ahead bias)
 
-**Backtest: 2010-2025, realistic A-share costs (buy 13bp + sell 43bp), LONG-ONLY**
+**Backtest: 2015-2025 (cubes data starts 2014), LONG-ONLY, realistic costs, inverted factor**
 
 | Metric | Value |
 |---|---|
-| **Annual Return** | **22.9%** |
-| **Max Drawdown** | **-23.0%** |
-| **Calmar Ratio** | **0.99** |
-| **Sharpe Ratio** | **1.32** |
-| **Win Rate** | **58.8%** (excluding go-flat periods) |
-| **Go-flat Ratio** | **23.1%** (fraction of periods not trading) |
-| **Annual Trading Cost** | **9.8%** (83% turnover × 56bp round-trip × 21 periods) |
-| **Losing Years** | **1 of 16** (2012: -4.6%) |
+| **Annual Return** | **~2%** (averaged across all start-date offsets) |
+| **Max Drawdown** | **-45% to -50%** |
+| **Calmar Ratio** | **0.04-0.05** |
+| **Win Rate** | **~47%** |
+| **Annual Trading Cost** | **9.8%** (83% turnover × 56bp round-trip) |
+| **Zero-cost Alpha** | **5.3%** (signal works but costs eat it) |
 
-### Known Limitations
-- Strategy return is sensitive to hold_step: adjacent values (17 vs 18) can differ 2x in calmar
-- 70% of alpha comes from regime timing (go-flat), not stock selection
-- Middle40 outperforms Top30 in raw returns — factor selection adds modest value
-- High turnover (83%) creates 9.8% annual cost burden
-- 29% of signal stocks have price >66 yuan (can't buy 1 lot with 10万 capital)
+### Critical Findings
+- **Previous 22.9% was fake**: go-flat mechanism used future returns (look-ahead bias)
+- **Factor is INVERTED**: Top30 (high consensus) returns 0.7%/yr, Bottom30 (low consensus) returns 7.5%/yr
+- **Cost is the bottleneck**: 5.3% raw alpha minus 9.8% cost = negative after-cost return
+- **hold_step sensitivity remains**: calmar swings wildly across adjacent values
+- **Randomized start test**: hold_step=12 positive in 92% of offsets (most stable)
 
 ---
 
