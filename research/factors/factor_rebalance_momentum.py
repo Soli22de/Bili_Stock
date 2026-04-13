@@ -73,11 +73,10 @@ def build_rebalance_momentum_factor(
     rows = []
     for stock, g in daily.groupby("stock_symbol"):
         g = g.sort_values("date").set_index("date")
-        full_idx = pd.date_range(start_dt, end_dt, freq="D")
-        
-        if factor_mode == "rate":
-            # For rate mode, we need history to calculate shift.
-            pass
+        # Use business days (Mon-Fri) instead of calendar days.
+        # Calendar days caused hold_step=12 to count ~9 trading days,
+        # and shift(14) to span only ~10 trading days instead of 14.
+        full_idx = pd.bdate_range(start_dt, end_dt, freq="B")
 
         g = g.reindex(full_idx)
         g.index.name = "date"

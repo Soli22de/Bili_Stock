@@ -25,10 +25,13 @@ def _enrich_from_stock_data(panel: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
         if not os.path.exists(fp):
             continue
         try:
-            d = pd.read_csv(fp, usecols=["日期", "收盘", "成交额"])
+            d = pd.read_csv(fp, usecols=["日期", "开盘", "收盘", "成交额"])
         except Exception:
-            continue
-        d.rename(columns={"日期": "date", "收盘": "close_sd", "成交额": "amount_sd"}, inplace=True)
+            try:
+                d = pd.read_csv(fp, usecols=["日期", "收盘", "成交额"])
+            except Exception:
+                continue
+        d.rename(columns={"日期": "date", "开盘": "open_sd", "收盘": "close_sd", "成交额": "amount_sd"}, inplace=True)
         d["date"] = pd.to_datetime(d["date"], errors="coerce").dt.normalize()
         d["close_sd"] = pd.to_numeric(d["close_sd"], errors="coerce")
         d["amount_sd"] = pd.to_numeric(d["amount_sd"], errors="coerce")
@@ -38,11 +41,10 @@ def _enrich_from_stock_data(panel: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
         d["fwd_ret_2w_sd"] = d["close_sd"].shift(-10) / d["close_sd"] - 1.0
         # 量价背离 (volume-price divergence): positive when price falls while volume rises (accumulation)
         d["vol_price_div5d"] = -(d["close_sd"].rolling(5, min_periods=3).corr(d["amount_sd"]))
-        # 日内反转 (intraday reversal): col index 2 = open price
-        # Documented IC -6 to -8%, ICIR -3.6, win rate 85% in A-shares at 10-20d hold (民生金工/中信建投 2025)
-        open_col = d.columns[2] if len(d.columns) > 2 else None
-        if open_col is not None:
-            open_sd = pd.to_numeric(d.iloc[:, 2], errors="coerce")
+        # 日内反转 (intraday reversal): (close/open - 1) summed over 5 days
+        # Documented IC -6 to -8%, ICIR -3.6, win rate 85% in A-shares (民生金工/中信建投 2025)
+        if "open_sd" in d.columns:
+            open_sd = pd.to_numeric(d["open_sd"], errors="coerce")
             ret_intra = (d["close_sd"] / open_sd.replace(0, np.nan) - 1.0)
             d["ret_intra5d"] = ret_intra.rolling(5, min_periods=3).sum()
         else:
@@ -295,6 +297,8 @@ def _build_rebalance(
 ):
     df = panel.dropna(subset=["date", "stock_symbol", "factor_z_raw", "factor_z_neu", "fwd_ret_2w"]).copy()
     df = df[(df["date"] >= pd.Timestamp("2010-01-01")) & (df["date"] <= pd.Timestamp("2025-12-31"))].copy()
+    # Bull: contrarian (-factor_z_raw) — consensus picks are overbought; IC only +0.001
+    # Choppy/Bear: momentum (factor_z_neu) — follow smart money; IC +0.010 in bear
     df["factor_use"] = np.where(df["regime"] == "上涨", -df["factor_z_raw"], df["factor_z_neu"])
     lo = df.groupby("date")["factor_use"].transform(lambda s: s.quantile(0.05))
     hi = df.groupby("date")["factor_use"].transform(lambda s: s.quantile(0.95))
