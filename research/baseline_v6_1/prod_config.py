@@ -20,14 +20,15 @@ PROD = dict(
     with_takeprofit=True,
     risk_cfg=dict(
         non_up_vol_q=0.65,
-        # Phase 4 winner: SRF v2 top25 + go-flat choppy
-        # calmar=0.513, ann_ret=9.69%, MDD=-18.9%, sharpe=0.790
+        # Phase 4 grid winner: SRF v2 (55/20/15/10) + top_k=15 + go-flat
+        # calmar=0.624, ann_ret=11.8%, MDD=-18.9%, sharpe=0.922
         # Validated on complete data (3767 stocks, 2010-2025, HS300 cached)
+        # top_k=15 beat 25 (+20%), weights 55/20/15/10 confirmed optimal
         choppy_loss_scale=0.0,
         choppy_loss_floor=0.0,
         use_srf=False,
         use_srf_v2=True,
-        top_k=25,
+        top_k=15,
         go_flat_choppy=False,
     ),
 )
