@@ -84,6 +84,36 @@ def _prepare_panel_v5(start_date: str = "2010-01-01", end_date: str = "2025-12-3
     panel_v5["is_suspended"] = panel_v5["is_suspended"].fillna(False)
     panel_v5["is_limit"] = panel_v5["is_limit"].fillna(False)
     panel_v5 = panel_v5[~panel_v5["is_suspended"] & ~panel_v5["is_limit"]].copy()
+    # High-conviction buy count: only buys with delta > 2%, rolling 10 bdays
+    try:
+        import sqlite3
+        _conn = sqlite3.connect(os.path.join(ROOT, "data", "cubes.db"))
+        _rb = pd.read_sql_query(
+            "SELECT cube_symbol, stock_symbol, created_at, target_weight, prev_weight_adjusted "
+            "FROM rebalancing_history WHERE status='success'", _conn)
+        _conn.close()
+        _rb["date"] = pd.to_datetime(_rb["created_at"], errors="coerce").dt.normalize()
+        _rb["target_weight"] = pd.to_numeric(_rb["target_weight"], errors="coerce")
+        _rb["prev_weight_adjusted"] = pd.to_numeric(_rb["prev_weight_adjusted"], errors="coerce")
+        _rb = _rb.dropna(subset=["date", "stock_symbol", "target_weight", "prev_weight_adjusted"])
+        _rb["weight_delta"] = _rb["target_weight"] - _rb["prev_weight_adjusted"]
+        _rb["stock_symbol"] = _rb["stock_symbol"].str.upper()
+        _hc = _rb[_rb["weight_delta"] > 2.0].groupby(["date", "stock_symbol"])["cube_symbol"].nunique().reset_index()
+        _hc.columns = ["date", "stock_symbol", "_hc_raw"]
+        _parts = []
+        for _s, _g in _hc.groupby("stock_symbol"):
+            _g = _g.sort_values("date").set_index("date")
+            _idx = pd.bdate_range(_g.index.min(), _g.index.max(), freq="B")
+            _g = _g.reindex(_idx).fillna(0)
+            _g["stock_symbol"] = _s
+            _g["highconv_10d"] = _g["_hc_raw"].rolling(10, min_periods=1).sum()
+            _parts.append(_g[["stock_symbol", "highconv_10d"]].reset_index().rename(columns={"index": "date"}))
+        if _parts:
+            _hc_df = pd.concat(_parts, ignore_index=True)
+            panel_v5 = panel_v5.merge(_hc_df, on=["date", "stock_symbol"], how="left")
+        panel_v5["highconv_10d"] = panel_v5.get("highconv_10d", pd.Series(0.0)).fillna(0.0)
+    except Exception:
+        panel_v5["highconv_10d"] = 0.0
     return panel_v5
 
 

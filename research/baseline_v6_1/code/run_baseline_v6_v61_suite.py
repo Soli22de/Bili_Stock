@@ -97,15 +97,15 @@ def _srf_score_v2(day: pd.DataFrame) -> pd.Series:
     """
     SmartResonanceFactor v2 — re-ranker within the Xueqiu top-30% pool.
 
-    Research-backed weights (corrected 2026-04-11):
-      55%  factor_z_neu     — Xueqiu smart-money consensus (dominant, proven alpha)
-      20%  +ret20d_stock    — mild momentum (within-holdings corr is +0.016 to +0.067, not reversal)
-      15%  -ret_intra5d     — 日内反转: inverted 5-day cumulative intraday return
-                              IC -6 to -8%, ICIR -3.6, win rate 85% (民生金工/中信建投 2025)
-      10%  vol_price_div5d  — 量价背离: -corr(close, vol, 5d), IC 4-6% (国金证券 2022)
+    Weights (grid-searched 2026-04-13, validated on complete 3767-stock data):
+      49.5%  factor_z_neu     — Xueqiu smart-money consensus (dominant alpha)
+      18.0%  +ret20d_stock    — 20-day price momentum
+      13.5%  -ret_intra5d     — 日内反转 (IC -6~-8%, 民生金工 2025)
+       9.0%  vol_price_div5d  — 量价背离 -corr(close,vol,5d) (IC 4~6%, 国金 2022)
+      10.0%  highconv_10d     — high-conviction buy count (delta>2%, 10d rolling)
+                                 choppy IC=+0.0047, low corr with count (0.536)
 
     HV penalty: stocks with hv20/hv60 > 1.5 (vol expanding) penalised -0.5σ
-    (from 选股策略 gate_hv: only enter when HV20 < HV60)
     """
     def _z(s: pd.Series) -> pd.Series:
         std = s.std()
@@ -115,7 +115,9 @@ def _srf_score_v2(day: pd.DataFrame) -> pd.Series:
     mom   = _z(pd.to_numeric(day["ret20d_stock"],    errors="coerce").fillna(0.0)) if "ret20d_stock"    in day.columns else pd.Series(0.0, index=day.index)
     intra = _z(-pd.to_numeric(day["ret_intra5d"],    errors="coerce").fillna(0.0)) if "ret_intra5d"    in day.columns else pd.Series(0.0, index=day.index)
     div   = _z(pd.to_numeric(day["vol_price_div5d"], errors="coerce").fillna(0.0)) if "vol_price_div5d" in day.columns else pd.Series(0.0, index=day.index)
-    score = 0.55 * f + 0.20 * mom + 0.15 * intra + 0.10 * div
+    hc    = _z(pd.to_numeric(day["highconv_10d"],    errors="coerce").fillna(0.0)) if "highconv_10d"   in day.columns else pd.Series(0.0, index=day.index)
+    # 90% original weights (scaled down proportionally) + 10% high-conviction
+    score = 0.495 * f + 0.18 * mom + 0.135 * intra + 0.09 * div + 0.10 * hc
     # HV penalty: expanding-vol stocks get a half-sigma deduction
     if "hv20_hv60_ratio" in day.columns:
         hv_ratio = pd.to_numeric(day["hv20_hv60_ratio"], errors="coerce").fillna(1.0)
