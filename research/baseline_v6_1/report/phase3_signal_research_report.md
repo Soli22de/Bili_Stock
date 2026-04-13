@@ -91,28 +91,55 @@ The pipeline's rate-of-change + smoothing processing gives best 下跌 IC (0.009
 
 ## 5. Recommended Next Steps
 
-**Priority 1: Integrate net_flow into factor pipeline**
+~~**Priority 1: Integrate net_flow into factor pipeline**~~ **TESTED — FAILED**
 
-The net_flow signal (buy-sell) is the highest-IC signal overall AND has positive choppy IC. If integrated:
-- May eliminate the need for `choppy_loss_scale=0.0` (since signal works in choppy)
-- Could boost calmar further by trading confidently in 30% of days currently avoided
-- Implementation: modify `factor_rebalance_momentum.py` to compute `SUM(weight_delta)` instead of `COUNT(DISTINCT cube WHERE buy)`
+~~**Priority 2: Test composite signal**~~ (deprioritized after backtest failure)
 
-**Priority 2: Test composite signal**
-
-Combine net_flow (best overall + choppy IC) with pipeline factor_z (best bear IC):
-- Simple blend: `0.5 * z(net_flow) + 0.5 * z(factor_z)`
-- Or regime-conditional: use net_flow in choppy, factor_z in bear
-
-**Priority 3: Run full backtest with net_flow factor**
-
-Replace `net_buy_cube_count` with `net_flow` in the panel builder, re-run choppy_fix_B backtest to see calmar impact.
+~~**Priority 3: Run full backtest with net_flow factor**~~ **DONE — see Section 6**
 
 ---
 
-## 6. Data Quality Notes
+## 6. Full Backtest Results: Net Flow vs Count (2010-2025)
+
+IC test showed net_flow choppy IC=+0.005 (positive), so we ran a full backtest replacing count with net_flow as the primary signal.
+
+| Config | Calmar | Ann Ret | MDD | Sharpe | 震荡 TB |
+|--------|--------|---------|-----|--------|---------|
+| A: Count + go-flat (production) | **0.348** | **+5.79%** | **-16.6%** | **0.387** | +0.0023 |
+| C: Net flow + full trading | -0.014 | -0.56% | -40.1% | -0.061 | -0.0025 |
+
+**Net flow as primary signal failed catastrophically.** Calmar went negative, MDD doubled.
+
+### Why IC didn't translate to backtest performance
+
+1. **Processing pipeline distortion**: IC was measured on raw net_flow z-scores. The actual backtest applies industry neutralization, liquidity filtering, and regime-conditional factor_use (bull=reversed, others=neutral). Net flow's information gets destroyed by these transformations.
+
+2. **Sparsity**: Net flow panel has 6.0M rows vs 3.3M for count. Most extra rows are zero-signal dates for stocks that were only sold once. These dilute the z-score cross-section.
+
+3. **Signal vs noise ratio**: Count signal is binary (did anyone buy?) which is robust to outliers. Net flow is continuous (how much?) which is sensitive to a single large sell/buy dominating the cross-section.
+
+### Lessons learned
+
+- **IC is necessary but not sufficient.** A factor can have positive IC in isolation but fail in a full strategy pipeline due to processing steps, position sizing, and risk controls.
+- **Count signal's simplicity is a feature, not a bug.** The binary "did smart money buy?" question is more robust than the continuous "how much net flow?"
+- **Sell signals may still add value as a filter**, not a primary signal. E.g., screen out stocks being net-sold before applying count signal.
+
+---
+
+## 7. Data Quality Notes
 
 - **Status filter fixed**: added `WHERE status='success'` — removes ~185 phantom buy signals
 - **Factor coverage**: 4,438 date-stock rows with non-zero signal out of 3.28M panel rows
 - **Conviction/quality correlation**: 0.979 — these are essentially the same signal, don't use both
 - **Runtime warnings**: numpy divide-by-zero on dates with single-stock factor values (harmless)
+
+---
+
+## 8. Final Conclusion
+
+**Production stays on count + go-flat choppy (choppy_loss_scale=0.0).** This remains the best configuration found across all Phase 2 and Phase 3 experiments.
+
+Future signal research should focus on:
+- Using sell signals as a **negative filter** (not primary signal)
+- High-conviction count (only count buys >2% delta) as an auxiliary signal
+- Improving stock data coverage for intraday reversal and HV ratio factors
