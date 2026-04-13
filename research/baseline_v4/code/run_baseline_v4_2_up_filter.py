@@ -57,7 +57,8 @@ def _load_hs300(start_date: str, end_date: str) -> pd.DataFrame:
     idx["regime"] = "震荡"
     idx.loc[idx["ret20"] > 0.02, "regime"] = "上涨"
     idx.loc[idx["ret20"] < -0.02, "regime"] = "下跌"
-    return idx[["date", "regime"]]
+    idx["hs300_ret20"] = idx["ret20"]
+    return idx[["date", "regime", "hs300_ret20"]]
 
 
 def _load_liquidity(liquidity_csv: str) -> pd.DataFrame:

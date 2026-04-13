@@ -74,6 +74,11 @@ def _prepare_panel_v5(start_date: str = "2010-01-01", end_date: str = "2025-12-3
     base = _industry_neutralize(base, source_col="factor_z_raw", out_col="factor_z_neu")
     regime = _load_hs300(start_date, end_date)
     panel_liq = _apply_liq_dynamic(base, regime_df=regime, keep_other=0.6, keep_up=0.2)
+    # Create liq_rank_pct so _run_one can apply its own liquidity filter
+    if "amount" in panel_liq.columns:
+        panel_liq["liq_rank_pct"] = panel_liq.groupby("date")["amount"].transform(
+            lambda s: s.rank(pct=True, method="first") if s.notna().any() else 1.0
+        )
     trad = _load_tradability_from_stock_data(ROOT)
     panel_v5 = panel_liq.merge(trad, on=["date", "stock_symbol"], how="left")
     panel_v5["is_suspended"] = panel_v5["is_suspended"].fillna(False)

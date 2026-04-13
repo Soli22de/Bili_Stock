@@ -496,13 +496,14 @@ def _apply_risk_controls(
     dd_mid: float = -0.10,
     dd_hard: float = -0.12,
     choppy_loss_scale: float = 1.0,
+    choppy_loss_floor: float = 0.0,
     go_flat_choppy: bool = False,
 ):
     """
     go_flat_choppy=True: zero ALL spread in 震荡 regime (true go-flat).
-    choppy_loss_scale only scales losing choppy periods and has a 0.30 floor.
-    go_flat_choppy overrides choppy_loss_scale and removes the floor entirely.
-    IC in 震荡 = -0.001 (noise); go-flat eliminates noise trading.
+    choppy_loss_scale: scales losing choppy periods, clamped to [choppy_loss_floor, 1.0].
+    choppy_loss_floor: minimum scale in losing choppy periods (default 0.0 = true zero).
+    go_flat_choppy overrides choppy_loss_scale entirely.
     """
     if ret is None or ret.empty:
         return ret, pd.DataFrame(columns=["date", "trigger_type", "subject", "value", "new_risk_scale", "recover_flag"])
@@ -540,7 +541,7 @@ def _apply_risk_controls(
             if go_flat_choppy:
                 risk_scale = 0.0  # true go-flat: zero ALL choppy periods
             elif float(spread.iloc[i]) < 0:
-                risk_scale = float(min(risk_scale, max(min(float(choppy_loss_scale), 1.0), 0.30)))
+                risk_scale = float(min(risk_scale, max(min(float(choppy_loss_scale), 1.0), float(choppy_loss_floor))))
         scales.append(risk_scale)
         reasons.append(reason if reason else ("drawdown_brake" if dd_scale < 1.0 else "none"))
         if risk_scale < 1.0:
@@ -725,6 +726,7 @@ def _run_one(
         "dd_hard": -0.12,
         "non_up_vol_q": 1.0,
         "choppy_loss_scale": 1.0,
+        "choppy_loss_floor": 0.0,
         "overheat_hs_trigger": 0.05,
         "overheat_ind_trigger": 0.08,
         "overheat_turn_q": 0.90,
@@ -781,6 +783,7 @@ def _run_one(
         dd_mid=float(cfg["dd_mid"]),
         dd_hard=float(cfg["dd_hard"]),
         choppy_loss_scale=float(cfg["choppy_loss_scale"]),
+        choppy_loss_floor=float(cfg["choppy_loss_floor"]),
         go_flat_choppy=bool(cfg["go_flat_choppy"]),
     )
     m = _metrics(ret)
