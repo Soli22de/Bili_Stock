@@ -629,7 +629,10 @@ def _metrics(x: pd.DataFrame) -> dict:
         "sortino": sortino,
         "calmar": calmar,
         "mdd": mdd,
-        "hit_ratio": float((d["Top30_net"] > d["Bottom30"]).mean()),
+        # Exclude go-flat periods (spread==0) from hit ratio — they are not trades
+        "hit_ratio": float((spread[spread != 0] > 0).mean()) if (spread != 0).any() else np.nan,
+        "hit_ratio_raw": float((d["Top30_net"] > d["Bottom30"]).mean()),
+        "go_flat_ratio": float((spread == 0).mean()),
         "excess": float(spread.mean()),
         "turnover": turnover,
         "downside_dev": ann_downside,
