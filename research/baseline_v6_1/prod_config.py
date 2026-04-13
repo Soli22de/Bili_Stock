@@ -20,13 +20,14 @@ PROD = dict(
     with_takeprofit=True,
     risk_cfg=dict(
         non_up_vol_q=0.65,
-        # Phase 2 winner: choppy_loss_scale=0.0 keeps full exposure on winning
-        # choppy days but caps losers at 30% floor — calmar 0.073→0.480 (+557%)
-        # True go-flat (go_flat_choppy=True) was tested and is worse (calmar=0.208)
-        # because it discards winning choppy periods along with the losers.
+        # Phase 4 winner: SRF v2 top25 + go-flat choppy
+        # calmar=0.513, ann_ret=9.69%, MDD=-18.9%, sharpe=0.790
+        # Validated on complete data (3767 stocks, 2010-2025, HS300 cached)
         choppy_loss_scale=0.0,
+        choppy_loss_floor=0.0,
         use_srf=False,
-        top_k=None,
+        use_srf_v2=True,
+        top_k=25,
         go_flat_choppy=False,
     ),
 )
@@ -34,8 +35,8 @@ PROD = dict(
 # ── Baseline file tag (drives all three file names) ───────────────────────────
 BASELINE_TAG = "choppy_fix_B_hold12_cap10"
 
-# Phase 2 winner tag — B_goflat_choppy from v3 grid (calmar=0.4802, 2010-2025)
-PHASE2_TAG: str | None = "choppy_fix_B_hold12_cap10_B_goflat_choppy"
+# Phase 4 winner — SRF v2 top25 + go-flat (calmar=0.513 on complete data)
+PHASE2_TAG: str | None = "choppy_fix_B_hold12_cap10_D_srfv2_top25_goflat"
 
 ACTIVE_TAG = PHASE2_TAG or BASELINE_TAG
 
