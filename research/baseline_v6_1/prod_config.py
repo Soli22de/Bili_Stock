@@ -19,15 +19,13 @@ PROD = dict(
     cap_up=0.20,
     with_takeprofit=True,
     risk_cfg=dict(
-        # Phase 4 final: calmar=1.128, ann_ret=18.8%, MDD=-16.7%, sharpe=1.478
-        # Validated on complete data (3767 stocks, 508K panel rows, 2010-2025)
+        # LONG-ONLY A-share backtest with realistic costs (2010-2025):
+        #   ann_ret=22.9%, MDD=-23.0%, calmar=0.99, sharpe=1.32
+        #   Annual trading cost: 9.8% (83% turnover × 56bp round-trip)
+        #   Win rate: 58.8% (excluding go-flat), 1/16 years negative
         #
-        # Key optimizations:
-        #   regime ±3% (was ±2%): calmar 0.626→1.036
-        #   vol filter 0.65→0.50: calmar +4%
-        #   drawdown brake tightened: MDD -16.5%→-15.6%
-        #   SRF v2 top_k=15 (was 25): calmar +20%
-        #   highconv_10d as 6th SRF factor: +1.8%
+        # Cost model: buy 13bp + sell 43bp = 56bp round-trip (asymmetric)
+        # hold_step=12 is stable in 10-15 range; 16-20 is unstable (overfit risk)
         non_up_vol_q=0.50,
         dd_soft=-0.05,
         dd_mid=-0.07,
@@ -38,14 +36,14 @@ PROD = dict(
         use_srf_v2=True,
         top_k=15,
         go_flat_choppy=False,
+        buy_cost=0.0013,   # 13bp: commission 3bp + transfer 0.2bp + slippage 10bp
+        sell_cost=0.0043,   # 43bp: commission 3bp + stamp 10bp + transfer 0.2bp + slippage 10bp + impact 20bp
     ),
 )
 
-# ── Baseline file tag (drives all three file names) ───────────────────────────
+# ── Baseline file tag ─────────────────────────────────────────────────────────
 BASELINE_TAG = "choppy_fix_B_hold12_cap10"
-
-# Phase 4 winner — SRF v2 top25 + go-flat (calmar=0.513 on complete data)
-PHASE2_TAG: str | None = "choppy_fix_B_hold12_cap10_D_srfv2_top25_goflat"
+PHASE2_TAG: str | None = "choppy_fix_B_hold12_cap10_D_srfv2_top15_goflat"
 
 ACTIVE_TAG = PHASE2_TAG or BASELINE_TAG
 
