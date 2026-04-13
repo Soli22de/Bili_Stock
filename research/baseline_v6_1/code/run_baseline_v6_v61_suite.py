@@ -134,6 +134,8 @@ def _pick_top(
     top_k: int | None = None,
     use_srf: bool = False,
     use_srf_v2: bool = False,
+    prev_holdings: set | None = None,
+    hold_bonus: float = 0.0,
 ) -> pd.DataFrame:
     n = len(day)
     if regime == "上涨":
@@ -191,9 +193,13 @@ def _pick_top(
                 raw = raw[vol_proxy.fillna(float("inf")) <= cut].copy()
         if raw.empty:
             return raw
-        # Step 3: Re-rank within gate by SRF v2 (reversal + divergence, no momentum)
+        # Step 3: Re-rank within gate by SRF v2
         raw = raw.copy()
         raw["srf_v2_score"] = _srf_score_v2(raw).values
+        # Hold bonus: add score to stocks already in portfolio (reduces turnover)
+        if prev_holdings and hold_bonus > 0:
+            is_held = raw["stock_symbol"].isin(prev_holdings)
+            raw.loc[is_held, "srf_v2_score"] = raw.loc[is_held, "srf_v2_score"] + hold_bonus
         n_pool = len(raw)
         n_pick = min(int(top_k), n_pool) if top_k is not None else n_pool
         cap_n = max(1, int(np.floor(n_pick * cap_non_up)))
@@ -296,6 +302,7 @@ def _build_rebalance(
     xq_warn_drop: float = 0.25,
     xq_recover_rise: float = 0.10,
     xq_require_neg_ret: bool = True,
+    cfg_hold_bonus: float = 0.0,
 ):
     df = panel.dropna(subset=["date", "stock_symbol", "factor_z_raw", "factor_z_neu", "fwd_ret_2w"]).copy()
     df = df[(df["date"] >= pd.Timestamp("2010-01-01")) & (df["date"] <= pd.Timestamp("2025-12-31"))].copy()
@@ -316,6 +323,7 @@ def _build_rebalance(
     hold_rows = []
     tp_event = {}
     risk_rows = []
+    prev_holdings_set: set = set()  # track previous period's holdings for hold bonus
     ind_cooldown_until = {}
     stk_cooldown_until = {}
     overheat_on = False
@@ -381,7 +389,7 @@ def _build_rebalance(
         regime = str(day["regime"].iloc[0])
         cap_non_up_use = max(float(cap_non_up), float(overheat_cap_non_up)) if overheat_on else float(cap_non_up)
         cap_up_use = max(float(cap_up), float(overheat_cap_up)) if overheat_on else float(cap_up)
-        top = _pick_top(day, regime, cap_non_up=cap_non_up_use, cap_up=cap_up_use, non_up_vol_q=non_up_vol_q, top_k=top_k, use_srf=use_srf, use_srf_v2=use_srf_v2)
+        top = _pick_top(day, regime, cap_non_up=cap_non_up_use, cap_up=cap_up_use, non_up_vol_q=non_up_vol_q, top_k=top_k, use_srf=use_srf, use_srf_v2=use_srf_v2, prev_holdings=prev_holdings_set, hold_bonus=float(cfg_hold_bonus))
         if xq_enable and not top.empty:
             top = top.copy()
             top["xq_heat_chg"] = _xq_heat_change(top)
@@ -415,6 +423,8 @@ def _build_rebalance(
         top["date"] = d
         top["weight"] = 1.0 / max(len(top), 1)
         hold_rows.append(top)
+        # Update prev holdings for next period's hold bonus
+        prev_holdings_set = set(top["stock_symbol"].astype(str).str.upper().tolist()) if not top.empty else set()
         if not top.empty:
             ind_ret = top.groupby(top["industry_l2"].fillna("其他").astype(str))["fwd_ret_2w_use"].mean()
             for ind_name, r in ind_ret.items():
@@ -468,15 +478,17 @@ def _build_rebalance(
     return reb, hold, tp_event, risk_log
 
 
-def _apply_costs(group_ret: pd.DataFrame, one_way_cost: float = 0.004) -> pd.DataFrame:
+def _apply_costs(group_ret: pd.DataFrame, buy_cost: float = 0.0013, sell_cost: float = 0.0043) -> pd.DataFrame:
     """
-    Apply realistic A-share trading costs.
-    Default one_way_cost=0.4% (40bp) = commission 3bp + stamp tax 10bp + transfer 0.2bp + slippage ~27bp
-    Both buy and sell incur cost, so round-trip = 2 * one_way_cost per turnover.
+    Apply realistic A-share trading costs (asymmetric buy/sell).
+    Default buy_cost=13bp (commission 3bp + transfer 0.2bp + slippage 10bp)
+    Default sell_cost=43bp (commission 3bp + stamp tax 10bp + transfer 0.2bp + slippage 10bp + impact 20bp)
+    Round-trip per unit turnover = buy_cost + sell_cost = 56bp
     """
     if group_ret is None or group_ret.empty:
         return pd.DataFrame(columns=["date", "regime", "Bottom30", "Middle40", "Top30", "top_symbols", "one_way_turnover", "trade_cost_rate", "Top30_net"])
     x = group_ret.copy().sort_values("date").reset_index(drop=True)
+    round_trip = buy_cost + sell_cost
     costs = []
     turnovers = []
     prev = set()
@@ -489,8 +501,7 @@ def _apply_costs(group_ret: pd.DataFrame, one_way_cost: float = 0.004) -> pd.Dat
             base_n = max(len(cur), 1)
             one_way_turnover = 1.0 - overlap / base_n
         turnovers.append(one_way_turnover)
-        # Round-trip: sell old positions + buy new positions
-        costs.append(one_way_turnover * one_way_cost * 2)
+        costs.append(one_way_turnover * round_trip)
         prev = cur
     x["one_way_turnover"] = turnovers
     x["trade_cost_rate"] = costs
@@ -761,6 +772,7 @@ def _run_one(
         "use_srf": False,
         "use_srf_v2": False,
         "go_flat_choppy": False,
+        "hold_bonus": 0.0,
     }
     if risk_cfg:
         cfg.update(risk_cfg)
@@ -792,8 +804,9 @@ def _run_one(
         top_k=cfg["top_k"],
         use_srf=bool(cfg["use_srf"]),
         use_srf_v2=bool(cfg["use_srf_v2"]),
+        cfg_hold_bonus=float(cfg["hold_bonus"]),
     )
-    ret = _apply_costs(reb, one_way_cost=float(cfg.get("one_way_cost", 0.004)))
+    ret = _apply_costs(reb, buy_cost=float(cfg.get("buy_cost", 0.0013)), sell_cost=float(cfg.get("sell_cost", 0.0043)))
     ret, risk_log_dyn = _apply_risk_controls(
         ret,
         market_hot_q_mid=float(cfg["market_hot_q_mid"]),
