@@ -17,6 +17,15 @@ def load_rebalancing_from_db(db_path: str) -> pd.DataFrame:
     finally:
         conn.close()
     rb["created_at"] = rb["created_at"].where(rb["created_at"].notna(), rb["updated_at"])
+    # Deduplicate: same cube + stock + date → keep last entry (final position of the day)
+    rb["_date"] = pd.to_datetime(rb["created_at"], errors="coerce").dt.normalize()
+    before = len(rb)
+    rb = rb.sort_values("created_at").drop_duplicates(
+        subset=["cube_symbol", "stock_symbol", "_date"], keep="last"
+    )
+    rb = rb.drop(columns=["_date"])
+    if len(rb) < before:
+        print(f"Deduplicated rebalancing: {before} → {len(rb)} ({before - len(rb)} duplicates removed)")
     return rb
 
 

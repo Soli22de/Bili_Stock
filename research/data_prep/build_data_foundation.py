@@ -38,15 +38,25 @@ def build_liquidity_from_stock_data() -> pd.DataFrame:
     for i, fp in enumerate(files):
         sym = os.path.basename(fp).replace(".csv", "").upper()
         try:
-            # Columns by position: 0=date, 1=code, 7=amount(成交额), 11=turnover(换手率)
-            d = pd.read_csv(fp, encoding="utf-8-sig", usecols=[0, 7, 11], header=0)
-            d.columns = ["date", "amount", "turnover_rate"]
-            d["date"] = pd.to_datetime(d["date"], errors="coerce").dt.normalize()
-            d["amount"] = pd.to_numeric(d["amount"], errors="coerce")
-            d["turnover_rate"] = pd.to_numeric(d["turnover_rate"], errors="coerce")
-            d["stock_symbol"] = sym
-            d = d.dropna(subset=["date"])
-            rows.append(d[["date", "stock_symbol", "amount", "turnover_rate"]])
+            d = pd.read_csv(fp, encoding="utf-8-sig", header=0)
+            ncols = len(d.columns)
+            # Two formats:
+            #   12-col: 日期,股票代码,开盘,收盘,最高,最低,成交量,成交额,振幅,涨跌幅,涨跌额,换手率
+            #   7-col:  日期,开盘,收盘,最高,最低,成交量,成交额
+            if ncols >= 12:
+                date_col, amount_col, turnover_col = d.columns[0], d.columns[7], d.columns[11]
+            elif ncols >= 7:
+                date_col, amount_col, turnover_col = d.columns[0], d.columns[6], None
+            else:
+                skipped += 1
+                continue
+            out_d = pd.DataFrame()
+            out_d["date"] = pd.to_datetime(d[date_col], errors="coerce").dt.normalize()
+            out_d["amount"] = pd.to_numeric(d[amount_col], errors="coerce")
+            out_d["turnover_rate"] = pd.to_numeric(d[turnover_col], errors="coerce") if turnover_col else np.nan
+            out_d["stock_symbol"] = sym
+            out_d = out_d.dropna(subset=["date"])
+            rows.append(out_d[["date", "stock_symbol", "amount", "turnover_rate"]])
         except Exception:
             skipped += 1
             continue

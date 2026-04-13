@@ -34,30 +34,42 @@ def _adx(high: pd.Series, low: pd.Series, close: pd.Series, n: int = 14) -> pd.S
 def _load_hs300(start_date: str, end_date: str) -> pd.DataFrame:
     """
     Load HS300 daily data and classify regime by 20-day return.
-    Tested: ADX(14) combined classifier increases choppy % (35.8% vs 30.8%)
-    and weakens bull/bear IC — pure ret20 threshold performs better.
-    _adx() is kept as a utility for future research.
+    Uses cached CSV if available (for reproducible backtests), falls back to baostock.
     """
-    lg = bs.login()
-    if str(lg.error_code) != "0":
-        raise RuntimeError(f"baostock login failed: {lg.error_msg}")
-    rs = bs.query_history_k_data_plus("sh.000300", "date,close", start_date, end_date, "d")
-    if str(rs.error_code) != "0":
+    _root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+    cache_path = os.path.join(_root, "data", "market_cache", "hs300_daily_cache.csv")
+    if os.path.exists(cache_path):
+        idx = pd.read_csv(cache_path, encoding="utf-8-sig")
+        idx["date"] = pd.to_datetime(idx["date"], errors="coerce").dt.normalize()
+        for c in ["close", "ret20", "hs300_ret20"]:
+            if c in idx.columns:
+                idx[c] = pd.to_numeric(idx[c], errors="coerce")
+        print(f"HS300: loaded from cache ({len(idx)} rows)")
+    else:
+        lg = bs.login()
+        if str(lg.error_code) != "0":
+            raise RuntimeError(f"baostock login failed: {lg.error_msg}")
+        rs = bs.query_history_k_data_plus("sh.000300", "date,close", start_date, end_date, "d")
+        if str(rs.error_code) != "0":
+            bs.logout()
+            raise RuntimeError(f"query_history_k_data_plus failed: {rs.error_msg}")
+        rows = []
+        while rs.error_code == "0" and rs.next():
+            rows.append(rs.get_row_data())
         bs.logout()
-        raise RuntimeError(f"query_history_k_data_plus failed: {rs.error_msg}")
-    rows = []
-    while rs.error_code == "0" and rs.next():
-        rows.append(rs.get_row_data())
-    bs.logout()
-    idx = pd.DataFrame(rows, columns=["date", "close"])
-    idx["date"] = pd.to_datetime(idx["date"], errors="coerce").dt.normalize()
-    idx["close"] = pd.to_numeric(idx["close"], errors="coerce")
-    idx = idx.dropna(subset=["date", "close"]).sort_values("date")
-    idx["ret20"] = idx["close"] / idx["close"].shift(20) - 1.0
-    idx["regime"] = "震荡"
-    idx.loc[idx["ret20"] > 0.02, "regime"] = "上涨"
-    idx.loc[idx["ret20"] < -0.02, "regime"] = "下跌"
-    idx["hs300_ret20"] = idx["ret20"]
+        idx = pd.DataFrame(rows, columns=["date", "close"])
+        idx["date"] = pd.to_datetime(idx["date"], errors="coerce").dt.normalize()
+        idx["close"] = pd.to_numeric(idx["close"], errors="coerce")
+        idx = idx.dropna(subset=["date", "close"]).sort_values("date")
+        idx["ret20"] = idx["close"] / idx["close"].shift(20) - 1.0
+        idx["regime"] = "震荡"
+        idx.loc[idx["ret20"] > 0.02, "regime"] = "上涨"
+        idx.loc[idx["ret20"] < -0.02, "regime"] = "下跌"
+        idx["hs300_ret20"] = idx["ret20"]
+        print(f"HS300: fetched from baostock ({len(idx)} rows) — run build_data_foundation.py to cache")
+    start_dt = pd.to_datetime(start_date).normalize()
+    end_dt = pd.to_datetime(end_date).normalize()
+    idx = idx[(idx["date"] >= start_dt) & (idx["date"] <= end_dt)].copy()
     return idx[["date", "regime", "hs300_ret20"]]
 
 
